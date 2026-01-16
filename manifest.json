@@ -1,0 +1,18 @@
+{
+  "name": "Feynman图绘制器",
+  "short_name": "FeynmanDraw",
+  "description": "Web Feynman diagram drawer with TikZ editable preview",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#3f51b5",
+  "theme_color": "#3f51b5",
+  "orientation": "landscape",
+  "icons": [
+    {
+      "src": "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTI4IiBoZWlnaHQ9IjEyOCIgdmlld0JveD0iMCAwIDI0IDI0IiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPgogIDxwYXRoIGQ9Ik0xMiAyTDIgN0wxMiAxMkwyMiA3TDEyIDJaIiBmaWxsPSIjM2Y1MWI1Ii8+CiAgPHBhdGggZD0iTTIgMTdMMTIgMjJMMjIgMTdWMTJMMiAxN1oiIGZpbGw9IiNmNTAwNTciLz4KPC9zdmc+",
+      "sizes": "128x128",
+      "type": "image/svg+xml"
+    }
+  ],
+  "categories": ["education", "graphics", "productivity"]
+}

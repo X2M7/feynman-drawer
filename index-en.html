@@ -1,0 +1,206 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Feynman Diagram Drawer</title>
+  <link rel="stylesheet" href="./style.css">
+  <link rel="manifest" href="./manifest.json">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+  <!-- Fabric.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.0/fabric.min.js"></script>
+  <!-- KaTeX (labels) -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+</head>
+<body>
+<div class="app-container">
+  <header class="app-header">
+    <h1><i class="fas fa-atom"></i> Feynman Diagram Drawer</h1>
+    <div class="header-actions">
+      <a id="langToggleBtn" href="./index.html" title="Switch to Chinese" data-target="./index.html"><i class="fas fa-language"></i> 中文</a>
+      <button id="helpBtn" title="Help"><i class="fas fa-question-circle"></i> Help</button>
+    </div>
+  </header>
+
+  <div class="main-content">
+    <aside class="sidebar">
+      <div class="tool-category">
+        <h3><i class="fas fa-mouse-pointer"></i> Selection Tools</h3>
+        <div class="tool-buttons">
+          <button class="tool-btn active" data-tool="select" title="Select/Move">
+            <i class="fas fa-arrows-alt"></i> Select
+          </button>
+          <button class="tool-btn" data-tool="hand" title="Pan canvas (hold Space for temporary hand)">
+            <i class="fas fa-hand-paper"></i> Pan
+          </button>
+          <button class="tool-btn" data-tool="delete" title="Delete element">
+            <i class="fas fa-trash"></i> Delete
+          </button>
+        </div>
+      </div>
+
+      <div class="tool-category">
+        <h3><i class="fas fa-shapes"></i> Basic Elements</h3>
+        <div class="tool-buttons">
+          <button class="tool-btn" data-tool="point" title="Point">
+            <i class="fas fa-circle"></i> Point
+          </button>
+          <button class="tool-btn" data-tool="line" title="Line">
+            <i class="fas fa-minus"></i> Line
+          </button>
+          <button class="tool-btn" data-tool="curve" title="Curve">
+            <i class="fas fa-bezier-curve"></i> Curve
+          </button>
+          <button class="tool-btn" data-tool="ellipse" title="Ellipse">
+            <i class="fas fa-egg"></i> Ellipse
+          </button>
+          <button class="tool-btn" data-tool="label" title="Label (KaTeX)">
+            <i class="fas fa-font"></i> Label
+          </button>
+        </div>
+      </div>
+
+      <div class="tool-category">
+        <h3><i class="fas fa-sliders-h"></i> Properties</h3>
+        <div class="property-panel" id="propertyPanel">
+          <div class="property-group">
+            <label>Line Style</label>
+            <select id="lineStyle">
+              <option value="solid">Solid</option>
+              <option value="dashed">Dashed</option>
+              <option value="wavy">Wavy</option>
+              <option value="spring">Spring</option>
+              <option value="dotted">Dotted</option>
+            </select>
+          </div>
+          <div class="property-group">
+            <label>Line Width</label>
+            <input type="range" id="lineWidth" min="1" max="5" value="2">
+          </div>
+          <div class="property-group">
+            <label>Color</label>
+            <input type="color" id="lineColor" value="#000000">
+          </div>
+          <div class="property-group">
+            <label>Arrow</label>
+            <select id="arrowStyle">
+              <option value="none">None</option>
+              <option value="forward">Forward</option>
+              <option value="mid-forward">Mid Forward</option>
+              <option value="backward">Backward</option>
+              <option value="mid-backward">Mid Backward</option>
+              <option value="both">Both</option>
+              <option value="mid-cross">Mid Cross</option>
+            </select>
+          </div>
+          <div class="property-group">
+            <label>Label Binding</label>
+            <select id="labelBindMode">
+              <option value="none">No Binding</option>
+              <option value="start">Bind to Start</option>
+              <option value="mid">Bind to Mid</option>
+              <option value="end">Bind to End</option>
+            </select>
+          </div>
+          <div class="property-group">
+            <label>Label Offset X/Y</label>
+            <div class="inline-fields">
+              <input type="number" id="labelOffsetX" value="0" step="1">
+              <input type="number" id="labelOffsetY" value="0" step="1">
+            </div>
+          </div>
+          <div class="property-group">
+            <button id="bindLabelBtn" class="btn-secondary">Bind to Last Selected Line</button>
+            <button id="unbindLabelBtn" class="btn-secondary">Unbind</button>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <main class="canvas-area">
+      <div class="canvas-container">
+        <canvas id="feynmanCanvas"></canvas>
+        <div class="canvas-grid"></div>
+        <div id="labelLayer" class="label-layer"></div>
+      </div>
+
+      <div class="canvas-controls">
+        <button id="zoomInBtn" title="Zoom In"><i class="fas fa-search-plus"></i></button>
+        <button id="zoomOutBtn" title="Zoom Out"><i class="fas fa-search-minus"></i></button>
+        <button id="resetViewBtn" title="Reset View"><i class="fas fa-expand-arrows-alt"></i></button>
+        <button id="gridToggleBtn" title="Toggle Grid" class="active"><i class="fas fa-th"></i></button>
+      </div>
+    </main>
+
+    <aside class="code-panel">
+      <div class="panel-header">
+        <h3><i class="fas fa-code"></i> TikZ Code (editable)</h3>
+        <div class="panel-actions">
+          <button id="clearCodeBtn" title="Clear canvas">
+            <i class="fas fa-trash"></i>
+          </button>
+          <button id="refreshCodeBtn" title="Apply: apply code to preview (Ctrl/⌘+Enter)">
+            <i class="fas fa-sync-alt"></i>
+          </button>
+        </div>
+      </div>
+
+      <div class="code-container">
+        <textarea id="tikzEditor" spellcheck="false"
+          placeholder="% Edit TikZ here (subset: \draw / \node)&#10;% After editing, click Apply in the top-right to update the preview"></textarea>
+      </div>
+
+      <div class="code-actions">
+        <button id="exportPngBtn" class="btn-secondary">
+          <i class="fas fa-image"></i> Export PNG
+        </button>
+        <button id="copyTikzBtn" class="btn-primary">
+          <i class="fas fa-copy"></i> Copy TikZ
+        </button>
+      </div>
+
+      <div class="history-panel">
+        <h3><i class="fas fa-history"></i> History</h3>
+        <div class="history-list" id="historyList"></div>
+      </div>
+    </aside>
+  </div>
+
+  <footer class="status-bar">
+    <div class="status-info">
+      <span id="cursorPos">X: 0, Y: 0</span>
+      <span id="selectedTool">Tool: Select</span>
+      <span id="zoomLevel">Zoom: 100%</span>
+    </div>
+    <div class="offline-status" id="offlineStatus">
+      <i class="fas fa-wifi"></i> Online
+    </div>
+  </footer>
+</div>
+
+<div id="exportModal" class="modal">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3>Export TikZ Code</h3>
+      <button class="close-btn">&times;</button>
+    </div>
+    <div class="modal-body">
+      <textarea id="exportedCode" readonly></textarea>
+      <div class="modal-actions">
+        <button id="copyModalBtn" class="btn-primary">Copy Code</button>
+        <button id="downloadBtn" class="btn-secondary">Download File</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="./app.js"></script>
+<script>
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('./service-worker.js')
+      .catch(err => console.error('SW register failed:', err));
+  }
+</script>
+</body>
+</html>

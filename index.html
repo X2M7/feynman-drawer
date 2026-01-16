@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Feynman图绘制器</title>
+  <link rel="stylesheet" href="./style.css">
+  <link rel="manifest" href="./manifest.json">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+  <!-- Fabric.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.0/fabric.min.js"></script>
+  <!-- KaTeX (labels) -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+</head>
+<body>
+<div class="app-container">
+  <header class="app-header">
+    <h1><i class="fas fa-atom"></i> Feynman图绘制器</h1>
+    <div class="header-actions">
+      <a id="langToggleBtn" href="./index-en.html" title="English" data-target="./index-en.html"><i class="fas fa-language"></i> EN</a>
+      <button id="helpBtn" title="帮助"><i class="fas fa-question-circle"></i> 帮助</button>
+    </div>
+  </header>
+
+  <div class="main-content">
+    <aside class="sidebar">
+      <div class="tool-category">
+        <h3><i class="fas fa-mouse-pointer"></i> 选择工具</h3>
+        <div class="tool-buttons">
+          <button class="tool-btn active" data-tool="select" title="选择/移动">
+            <i class="fas fa-arrows-alt"></i> 选择
+          </button>
+          <button class="tool-btn" data-tool="hand" title="拖动画布（也可按住 Space 临时拖动）">
+            <i class="fas fa-hand-paper"></i> 拖动
+          </button>
+          <button class="tool-btn" data-tool="delete" title="删除元素">
+            <i class="fas fa-trash"></i> 删除
+          </button>
+        </div>
+      </div>
+
+      <div class="tool-category">
+        <h3><i class="fas fa-shapes"></i> 基本元素</h3>
+        <div class="tool-buttons">
+          <button class="tool-btn" data-tool="point" title="点">
+            <i class="fas fa-circle"></i> 点
+          </button>
+          <button class="tool-btn" data-tool="line" title="直线">
+            <i class="fas fa-minus"></i> 直线
+          </button>
+          <button class="tool-btn" data-tool="curve" title="曲线">
+            <i class="fas fa-bezier-curve"></i> 曲线
+          </button>
+          <button class="tool-btn" data-tool="ellipse" title="椭圆">
+            <i class="fas fa-egg"></i> 椭圆
+          </button>
+          <button class="tool-btn" data-tool="label" title="标签（KaTeX）">
+            <i class="fas fa-font"></i> 标签
+          </button>
+        </div>
+      </div>
+
+      <div class="tool-category">
+        <h3><i class="fas fa-sliders-h"></i> 属性设置</h3>
+        <div class="property-panel" id="propertyPanel">
+          <div class="property-group">
+            <label>线型</label>
+            <select id="lineStyle">
+              <option value="solid">实线</option>
+              <option value="dashed">虚线</option>
+              <option value="wavy">波浪线</option>
+              <option value="spring">弹簧线</option>
+              <option value="dotted">点线</option>
+            </select>
+          </div>
+          <div class="property-group">
+            <label>线宽</label>
+            <input type="range" id="lineWidth" min="1" max="5" value="2">
+          </div>
+          <div class="property-group">
+            <label>颜色</label>
+            <input type="color" id="lineColor" value="#000000">
+          </div>
+          <div class="property-group">
+            <label>箭头</label>
+            <select id="arrowStyle">
+              <option value="none">无</option>
+              <option value="forward">正向</option>
+              <option value="mid-forward">居中正向</option>
+              <option value="backward">反向</option>
+              <option value="mid-backward">居中反向</option>
+              <option value="both">双向</option>
+              <option value="mid-cross">中间叉号</option>
+            </select>
+          </div>
+          <div class="property-group">
+            <label>标签绑定</label>
+            <select id="labelBindMode">
+              <option value="none">不绑定</option>
+              <option value="start">绑定起点</option>
+              <option value="mid">绑定中点</option>
+              <option value="end">绑定终点</option>
+            </select>
+          </div>
+          <div class="property-group">
+            <label>标签偏移 X/Y</label>
+            <div class="inline-fields">
+              <input type="number" id="labelOffsetX" value="0" step="1">
+              <input type="number" id="labelOffsetY" value="0" step="1">
+            </div>
+          </div>
+          <div class="property-group">
+            <button id="bindLabelBtn" class="btn-secondary">绑定到最近选中线</button>
+            <button id="unbindLabelBtn" class="btn-secondary">取消绑定</button>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <main class="canvas-area">
+      <div class="canvas-container">
+        <canvas id="feynmanCanvas"></canvas>
+        <div class="canvas-grid"></div>
+        <div id="labelLayer" class="label-layer"></div>
+      </div>
+
+      <div class="canvas-controls">
+        <button id="zoomInBtn" title="放大"><i class="fas fa-search-plus"></i></button>
+        <button id="zoomOutBtn" title="缩小"><i class="fas fa-search-minus"></i></button>
+        <button id="resetViewBtn" title="重置视图"><i class="fas fa-expand-arrows-alt"></i></button>
+        <button id="gridToggleBtn" title="切换网格" class="active"><i class="fas fa-th"></i></button>
+      </div>
+    </main>
+
+    <aside class="code-panel">
+      <div class="panel-header">
+        <h3><i class="fas fa-code"></i> TikZ 代码（可编辑）</h3>
+        <div class="panel-actions">
+          <button id="clearCodeBtn" title="清空画布">
+            <i class="fas fa-trash"></i>
+          </button>
+          <button id="refreshCodeBtn" title="Apply：应用右侧代码到预览（Ctrl/⌘Enter）">
+            <i class="fas fa-sync-alt"></i>
+          </button>
+        </div>
+      </div>
+
+      <div class="code-container">
+        <textarea id="tikzEditor" spellcheck="false"
+          placeholder="% 在此编辑 TikZ（支持子集：\draw / \node）&#10;% 修改后点击右上角 Apply 应用到预览&#10;"></textarea>
+      </div>
+
+      <div class="code-actions">
+        <button id="exportPngBtn" class="btn-secondary">
+          <i class="fas fa-image"></i> 导出PNG
+        </button>
+        <button id="copyTikzBtn" class="btn-primary">
+          <i class="fas fa-copy"></i> 复制TikZ
+        </button>
+      </div>
+
+      <div class="history-panel">
+        <h3><i class="fas fa-history"></i> 历史记录</h3>
+        <div class="history-list" id="historyList"></div>
+      </div>
+    </aside>
+  </div>
+
+  <footer class="status-bar">
+    <div class="status-info">
+      <span id="cursorPos">X: 0, Y: 0</span>
+      <span id="selectedTool">工具: 选择</span>
+      <span id="zoomLevel">缩放: 100%</span>
+    </div>
+    <div class="offline-status" id="offlineStatus">
+      <i class="fas fa-wifi"></i> 在线
+    </div>
+  </footer>
+</div>
+
+<div id="exportModal" class="modal">
+  <div class="modal-content">
+    <div class="modal-header">
+      <h3>导出 TikZ 代码</h3>
+      <button class="close-btn">&times;</button>
+    </div>
+    <div class="modal-body">
+      <textarea id="exportedCode" readonly></textarea>
+      <div class="modal-actions">
+        <button id="copyModalBtn" class="btn-primary">复制代码</button>
+        <button id="downloadBtn" class="btn-secondary">下载文件</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="./app.js"></script>
+<script>
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('./service-worker.js')
+      .catch(err => console.error('SW register failed:', err));
+  }
+</script>
+</body>
+</html>

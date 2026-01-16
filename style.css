@@ -1,0 +1,441 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --primary-color: #3f51b5;
+  --secondary-color: #f50057;
+  --background-color: #f5f5f5;
+  --sidebar-width: 280px;
+  --code-panel-width: 350px;
+  --header-height: 60px;
+  --status-height: 30px;
+}
+
+body {
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background: var(--background-color);
+  overflow: hidden;
+  height: 100vh;
+}
+
+.app-container { display: flex; flex-direction: column; height: 100vh; }
+
+/* header */
+.app-header {
+  background: linear-gradient(135deg, var(--primary-color), #5c6bc0);
+  color: white;
+  padding: 0 20px;
+  height: var(--header-height);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+  z-index: 100;
+}
+.app-header h1 {
+  font-size: 1.5rem;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.header-actions { display: flex; gap: 10px; }
+.header-actions button,
+.header-actions a {
+  background: rgba(255,255,255,0.1);
+  border: 1px solid rgba(255,255,255,0.3);
+  color: white;
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  transition: all 0.2s;
+  text-decoration: none;
+}
+.header-actions button:hover,
+.header-actions a:hover {
+  background: rgba(255,255,255,0.2);
+  transform: translateY(-1px);
+}
+
+.main-content { display: flex; flex: 1; overflow: hidden; }
+
+/* sidebar */
+.sidebar {
+  width: var(--sidebar-width);
+  background: white;
+  border-right: 1px solid #ddd;
+  padding: 20px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.tool-category h3 {
+  color: var(--primary-color);
+  margin-bottom: 10px;
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.tool-buttons {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin-bottom: 20px;
+}
+.tool-btn {
+  padding: 10px;
+  border: 1px solid #ddd;
+  background: white;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  transition: all 0.2s;
+  font-size: 0.8rem;
+}
+.tool-btn:hover { border-color: var(--primary-color); background: #f0f4ff; }
+.tool-btn.active { background: var(--primary-color); color: white; border-color: var(--primary-color); }
+
+.property-panel { display: flex; flex-direction: column; gap: 12px; }
+.property-group { display: flex; flex-direction: column; gap: 5px; }
+.property-group label { font-size: 0.8rem; color: #666; }
+.property-group select,
+.property-group input[type="range"],
+.property-group input[type="color"],
+.property-group input[type="number"] {
+  padding: 5px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  width: 100%;
+}
+.inline-fields {
+  display: flex;
+  gap: 6px;
+}
+.inline-fields input {
+  flex: 1;
+  min-width: 0;
+}
+#labelOffsetX,
+#labelOffsetY {
+  max-width: none;
+  width: 100%;
+}
+.property-group .btn-secondary {
+  width: 100%;
+  padding: 8px;
+  font-size: 0.85rem;
+}
+
+/* canvas */
+.canvas-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+  background: #f8f9fa;
+  position: relative;
+}
+.canvas-container {
+  flex: 1;
+  border: 1px solid #ddd;
+  background: white;
+  position: relative;
+  overflow: hidden;
+  border-radius: 8px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+}
+
+/* 关键：不要把 canvas 光标写死成 crosshair，让 JS 能切换 grab/crosshair */
+#feynmanCanvas { width: 100%; height: 100%; cursor: inherit; }
+
+.canvas-grid {
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background-image:
+    linear-gradient(#e0e0e0 1px, transparent 1px),
+    linear-gradient(90deg, #e0e0e0 1px, transparent 1px);
+  background-size: 20px 20px;
+  pointer-events: none;
+  opacity: 0.3;
+  z-index: 5;
+}
+
+.canvas-controls {
+  position: absolute;
+  bottom: 30px;
+  right: 30px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: white;
+  padding: 10px;
+  border-radius: 8px;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+}
+.canvas-controls button {
+  width: 40px;
+  height: 40px;
+  border: 1px solid #ddd;
+  background: white;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+.canvas-controls button:hover { background: #f5f5f5; border-color: var(--primary-color); }
+.canvas-controls button.active { background: var(--primary-color); color: white; border-color: var(--primary-color); }
+
+/* code panel */
+.code-panel {
+  width: var(--code-panel-width);
+  background: white;
+  border-left: 1px solid #ddd;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.panel-header {
+  padding: 15px 20px;
+  border-bottom: 1px solid #ddd;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: #f8f9fa;
+}
+.panel-header h3 {
+  color: var(--primary-color);
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.panel-actions { display: flex; gap: 8px; }
+.panel-actions button {
+  background: white;
+  border: 1px solid #ddd;
+  width: 32px;
+  height: 32px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.code-container {
+  flex: 1;
+  padding: 0;
+  overflow: hidden;
+  background: #1e1e1e;
+  color: #d4d4d4;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+/* TikZ editor textarea */
+#tikzEditor{
+  width: 100%;
+  height: 100%;
+  border: none;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: #d4d4d4;
+  font-family: 'Consolas','Monaco', monospace;
+  font-size: 0.9rem;
+  line-height: 1.4;
+  padding: 20px;
+  white-space: pre;
+}
+
+.code-actions {
+  padding: 15px 20px;
+  border-top: 1px solid #ddd;
+  display: flex;
+  gap: 10px;
+}
+.btn-primary, .btn-secondary {
+  flex: 1;
+  padding: 10px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all 0.2s;
+}
+.btn-primary { background: var(--primary-color); color: white; }
+.btn-secondary { background: #6c757d; color: white; }
+.btn-primary:hover { background: #303f9f; }
+.btn-secondary:hover { background: #5a6268; }
+
+.history-panel {
+  border-top: 1px solid #ddd;
+  padding: 15px 20px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.history-panel h3 {
+  color: var(--primary-color);
+  font-size: 0.9rem;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.history-list { display: flex; flex-direction: column; gap: 5px; }
+
+/* history item (你原 CSS 没有这个类，我补上使其可见可点) */
+.history-item{
+  padding: 8px 10px;
+  background: #f8f9fa;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.history-item:hover{
+  background: #e9ecef;
+  border-color: var(--primary-color);
+}
+
+/* status */
+.status-bar {
+  height: var(--status-height);
+  background: white;
+  border-top: 1px solid #ddd;
+  padding: 0 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.8rem;
+  color: #666;
+}
+.status-info { display: flex; gap: 20px; }
+
+/* modal */
+.modal {
+  display: none;
+  position: fixed;
+  top: 0; left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0,0,0,0.5);
+  z-index: 1000;
+  align-items: center;
+  justify-content: center;
+}
+.modal.active { display: flex; }
+.modal-content {
+  background: white;
+  width: 600px;
+  max-width: 90%;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+}
+.modal-header {
+  padding: 20px;
+  background: var(--primary-color);
+  color: white;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.modal-header .close-btn {
+  background: none;
+  border: none;
+  color: white;
+  font-size: 1.5rem;
+  cursor: pointer;
+  line-height: 1;
+}
+.modal-body { padding: 20px; }
+#exportedCode {
+  width: 100%;
+  height: 300px;
+  padding: 10px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font-family: 'Consolas', monospace;
+  font-size: 0.9rem;
+  resize: vertical;
+  margin-bottom: 20px;
+}
+.modal-actions { display: flex; gap: 10px; justify-content: flex-end; }
+
+/* responsive */
+@media (max-width: 1200px) {
+  .sidebar { width: 240px; }
+  .code-panel { width: 300px; }
+}
+@media (max-width: 768px) {
+  .main-content { flex-direction: column; }
+  .sidebar, .code-panel { width: 100%; max-height: 200px; }
+  .canvas-controls { bottom: 10px; right: 10px; }
+}
+
+/* scrollbars */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 4px; }
+::-webkit-scrollbar-thumb { background: #c1c1c1; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #a8a8a8; }
+
+/* ---------- KaTeX label overlay ---------- */
+.label-layer{
+  position:absolute;
+  left:0; top:0; right:0; bottom:0;
+  pointer-events:none;
+  z-index: 20;
+}
+
+.latex-label{
+  position:absolute;
+  pointer-events:auto;
+  cursor: move;
+  user-select: none;
+  transform: translate(-50%, -50%);
+  color:#000;
+  background: transparent;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+.latex-label.dragging{
+  outline: 1px dashed rgba(63,81,181,0.8);
+  background: rgba(63,81,181,0.06);
+}
+.latex-label.selected{
+  outline: 2px solid rgba(63,81,181,0.8);
+  background: rgba(63,81,181,0.06);
+}
+.latex-label .katex { font-size: 1.1em; }
+
+/* Hand/Space-hand：禁用标签交互，避免挡住拖动画布 */
+.label-layer.labels-disabled .latex-label{
+  pointer-events: none !important;
+}
+
+/* 移动端：让手势交给我们处理（避免浏览器默认滚动/双指缩放） */
+.canvas-container,
+#feynmanCanvas,
+.label-layer {
+  touch-action: none;
+}
+
+/* 兜底：防止 iOS Safari 在 canvas 上触发页面滚动回弹 */
+html, body {
+  overscroll-behavior: none;
+}
