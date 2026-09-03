@@ -1151,7 +1151,7 @@ Pan & zoom:
       stroke: paint.stroke,
       strokeWidth: paint.strokeWidth,
       strokeDashArray: this.getDashArray(paint.lineStyle),
-      strokeLineCap: 'round',
+      strokeLineCap: this.getStrokeLineCap(paint.lineStyle),
       strokeLineJoin: 'round',
       fill: null,
       selectable: false,
@@ -1192,7 +1192,10 @@ Pan & zoom:
       lineStyle: paint.lineStyle
     });
     this.replacePathGeometry(this.tempObj, pathStr);
-    this.tempObj.set({ strokeDashArray: this.getDashArray(paint.lineStyle) });
+    this.tempObj.set({
+      strokeDashArray: this.getDashArray(paint.lineStyle),
+      strokeLineCap: this.getStrokeLineCap(paint.lineStyle)
+    });
     this.tempObj.setCoords();
     this.canvas.requestRenderAll();
   }
@@ -1592,9 +1595,17 @@ Pan & zoom:
   }
 
   getDashArray(style) {
-    if (style === 'dashed') return [8, 6];
+    // TikZ's built-in `dashed` style is 3pt on / 3pt off. Canvas pixels
+    // map to half-point TikZ widths in this editor, so the preview is 6/6.
+    if (style === 'dashed') return [6, 6];
     if (style === 'dotted') return [2, 6];
     return null;
+  }
+
+  getStrokeLineCap(style) {
+    // A round cap expands every dash by one stroke width and can erase the
+    // gaps completely on thick lines. PGF/TikZ's dashed style uses butt caps.
+    return style === 'dashed' ? 'butt' : 'round';
   }
 
   getDefaultCurveCtrl(start, end) {
@@ -2012,7 +2023,7 @@ Pan & zoom:
       stroke: data.style.stroke,
       strokeWidth: data.style.strokeWidth,
       strokeDashArray: this.getDashArray(data.style.lineStyle),
-      strokeLineCap: 'round',
+      strokeLineCap: this.getStrokeLineCap(data.style.lineStyle),
       strokeLineJoin: 'round',
       fill: null,
       selectable: false,

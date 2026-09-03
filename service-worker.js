@@ -1,4 +1,4 @@
-const CACHE_NAME = 'feyndraw-v13';
+const CACHE_NAME = 'feyndraw-v14';
 
 const urlsToCache = [
   './',
