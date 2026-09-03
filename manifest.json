@@ -1,6 +1,6 @@
 {
-  "name": "Feynman图绘制器",
-  "short_name": "FeynmanDraw",
+  "name": "FeynDraw",
+  "short_name": "FeynDraw",
   "description": "Web Feynman diagram drawer with TikZ editable preview",
   "start_url": "./index.html",
   "display": "standalone",

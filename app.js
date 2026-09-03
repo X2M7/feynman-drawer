@@ -22,6 +22,9 @@ class FeynmanDrawer {
 
     // view state
     this.zoomLevel = 1;
+    this.gridVisible = true;
+    this.snapToGrid = true;
+    this.gridSize = 20;
 
     // panning state
     this.isPanning = false;
@@ -43,7 +46,7 @@ class FeynmanDrawer {
     this.selectedLabelId = null;
     this.lastLineSelectionId = null;
     this.objectId = 0;
-    this.curveHandles = { start: null, end: null, ctrl: null };
+    this.curveHandles = { guideStart: null, guideEnd: null, start: null, end: null, ctrl: null };
 
     // TikZ editor
     this.tikzEditor = null;
@@ -55,6 +58,7 @@ class FeynmanDrawer {
     this.history = [];
     this.historyIndex = -1;
     this.historyTimer = null;
+    this.isBulkUpdating = false;
 
     this.initLocalization();
     this.init();
@@ -71,13 +75,16 @@ class FeynmanDrawer {
         helpText:
 `基本操作：
 - 点/直线/曲线/椭圆/标签工具绘制元素
-- 选中曲线后可拖动控制点调整形状
+- 选中曲线后拖动白色控制点；辅助虚线对应 TikZ controls，端点保持固定
 - 选中标签可绑定到线的起点/中点/终点并调偏移
+- 在空白处拖动可框选；Ctrl/⌘+D 复制，Ctrl/⌘+G 组合，Ctrl/⌘+Shift+G 取消组合
+- 可拖动画板与 TikZ 面板之间的分隔线调节宽度
 
 平移缩放：
 - Hand 工具拖拽平移；Space 临时 Hand
 - 滚轮默认平移；Ctrl/⌘滚轮缩放
-- 触控：双指平移/缩放`,
+- 触控：双指平移/缩放
+- 网格显示、网格吸附与格距可分别调节`,
         katexNotReady: 'KaTeX 未加载完成，请稍等刷新后再试。',
         labelPrompt: '请输入标签（KaTeX/LaTeX）：例如 e^- 或 \\gamma 或 \\frac{1}{2}',
         labelDefault: '\\gamma',
@@ -85,6 +92,10 @@ class FeynmanDrawer {
         tikzParseFail: 'TikZ 解析失败：请保持在支持的子集语法内。',
         saveLoadNotImplemented: '保存/打开：当前版本未实现（可继续扩展）。',
         applyTitle: 'Apply：应用右侧 TikZ 到预览（Ctrl/⌘+Enter）',
+        applyLabel: 'Apply',
+        applyPendingTitle: '代码尚未应用；点击以更新画布（Ctrl/⌘+Enter）',
+        exportPngLabel: '导出 PNG',
+        copyTikzLabel: '复制 TikZ',
         clearCanvasTitle: '清空画布（并重置右侧代码为默认）',
         clearConfirm: '确定要清空画布吗？',
         toolNames: {
@@ -104,13 +115,16 @@ class FeynmanDrawer {
         helpText:
 `Basics:
 - Use Point/Line/Curve/Ellipse/Label to draw
-- Select a curve to drag control points
+- Drag a selected curve's white control point; guides map to TikZ controls while endpoints stay fixed
 - Select a label to bind to line start/mid/end and adjust offsets
+- Drag on empty canvas to marquee-select; Ctrl/⌘+D duplicates, Ctrl/⌘+G groups, Ctrl/⌘+Shift+G ungroups
+- Drag the divider between the canvas and TikZ panel to resize them
 
 Pan & zoom:
 - Hand tool to pan; hold Space for temporary hand
 - Wheel pans; Ctrl/⌘ + wheel zooms
-- Touch: two-finger pan/zoom`,
+- Touch: two-finger pan/zoom
+- Grid visibility, snapping, and spacing are independently adjustable`,
         katexNotReady: 'KaTeX is not ready yet. Please refresh and try again.',
         labelPrompt: 'Enter a label (KaTeX/LaTeX), e.g. e^- or \\gamma or \\frac{1}{2}',
         labelDefault: '\\gamma',
@@ -118,6 +132,10 @@ Pan & zoom:
         tikzParseFail: 'TikZ parse failed. Please keep to the supported subset.',
         saveLoadNotImplemented: 'Save/Load: not implemented in this version (can be extended).',
         applyTitle: 'Apply: apply TikZ to preview (Ctrl/⌘+Enter)',
+        applyLabel: 'Apply',
+        applyPendingTitle: 'Code has unapplied changes; click to update the canvas (Ctrl/⌘+Enter)',
+        exportPngLabel: 'Export PNG',
+        copyTikzLabel: 'Copy TikZ',
         clearCanvasTitle: 'Clear canvas (and reset editor to default)',
         clearConfirm: 'Clear the canvas?',
         toolNames: {
@@ -147,10 +165,12 @@ Pan & zoom:
     this.tikzEditor = document.getElementById('tikzEditor');
 
     this.bindEvents();
+    this.initGridSettings();
     this.handleResize();
 
     // initial editor content
     this.generateTikZCode({ forceWriteEditor: true });
+    this.setEditorDirty(false);
 
     this.applyToolMode();
     this.pushHistoryDebounced('init');
@@ -179,7 +199,10 @@ Pan & zoom:
     this.canvas.enableRetinaScaling = true;
 
     // Keep DOM labels synced with viewport
-    this.canvas.on('after:render', () => this.renderAllLabels());
+    this.canvas.on('after:render', () => {
+      this.renderAllLabels();
+      this.updateGridVisual();
+    });
   }
 
   // -------------------- Event binding --------------------
@@ -213,6 +236,7 @@ Pan & zoom:
 
     // object changes -> tikz + history
     const onCanvasChanged = (opt) => {
+      if (this.isBulkUpdating) return;
       if (opt && opt.target && opt.target.data && opt.target.data.kind === 'control') return;
       this.generateTikZCode({ forceWriteEditor: false });
       this.pushHistoryDebounced('canvas');
@@ -233,12 +257,23 @@ Pan & zoom:
     this.safeBind('zoomOutBtn', 'click', () => this.zoomAtCanvasCenter(0.8));
     this.safeBind('resetViewBtn', 'click', () => this.resetView());
     this.safeBind('gridToggleBtn', 'click', () => this.toggleGrid());
+    this.safeBind('snapToGridToggle', 'change', (e) => this.setSnapToGrid(e.target.checked));
+    this.safeBind('gridSizeInput', 'change', (e) => this.setGridSize(e.target.value));
+    this.safeBind('gridSizeInput', 'input', (e) => this.setGridSize(e.target.value, { commit: false }));
+
+    // selection actions
+    this.safeBind('duplicateBtn', 'click', () => this.duplicateSelected());
+    this.safeBind('groupBtn', 'click', () => this.groupSelection());
+    this.safeBind('ungroupBtn', 'click', () => this.ungroupSelection());
 
     // code panel actions
     // clearCodeBtn: clear canvas (same as header clearBtn) and reset editor to default
     this.safeBind('clearCodeBtn', 'click', () => this.clearCanvas());
-    this.safeBind('refreshCodeBtn', 'click', () => this.applyEditorToPreview()); // Apply
-    this.safeBind('copyTikzBtn', 'click', () => this.copyTikZCode());
+    this.safeBind('refreshCodeBtn', 'click', () => this.applyEditorToPreview()); // legacy Apply button
+    this.safeBind('copyTikzBtn', 'click', () => {
+      if (this.editorDirty) this.applyEditorToPreview();
+      else this.copyTikZCode();
+    });
 
     // header actions
     this.safeBind('exportBtn', 'click', () => this.exportTikZ());
@@ -248,7 +283,14 @@ Pan & zoom:
     this.safeBind('loadBtn', 'click', () => alert(this.t('saveLoadNotImplemented')));
 
     // export png
-    this.safeBind('exportPngBtn', 'click', () => this.exportPNG());
+    this.safeBind('exportPngBtn', 'click', () => {
+      if (this.editorDirty) this.applyEditorToPreview();
+      else this.exportPNG();
+    });
+    this.safeBind('exportSvgBtn', 'click', () => {
+      if (this.editorDirty) this.applyEditorToPreview();
+      else this.exportSVG();
+    });
 
     // modal
     const closeBtn = document.querySelector('.close-btn');
@@ -271,7 +313,7 @@ Pan & zoom:
     if (this.tikzEditor) {
       this.tikzEditor.addEventListener('input', () => {
         if (this.isSyncingEditor) return;
-        this.editorDirty = true;
+        this.setEditorDirty(this.tikzEditor.value !== this.lastGeneratedTikZ);
       });
 
       // Ctrl/Cmd + Enter -> Apply
@@ -316,6 +358,8 @@ Pan & zoom:
 
     const clearCanvasBtn = document.getElementById('clearCodeBtn');
     if (clearCanvasBtn) clearCanvasBtn.title = this.t('clearCanvasTitle');
+
+    this.updateSelectionActionState();
   }
 
   safeBind(id, evt, handler) {
@@ -359,7 +403,8 @@ Pan & zoom:
     this.canvas.getObjects().forEach(obj => {
       const isControl = !!(obj && obj.data && obj.data.kind === 'control');
       if (isControl) {
-        obj.set({ selectable: true, evented: true });
+        const passive = !!obj.data.passive;
+        obj.set({ selectable: !passive, evented: !passive });
         return;
       }
       if (isDrawTool || this.tool === 'hand') {
@@ -376,7 +421,23 @@ Pan & zoom:
   }
 
   onKeyDown(e) {
+    if ((e.ctrlKey || e.metaKey) && !this.isTypingTarget(e.target)) {
+      const key = e.key.toLowerCase();
+      if (key === 'd') {
+        e.preventDefault();
+        this.duplicateSelected();
+        return;
+      }
+      if (key === 'g') {
+        e.preventDefault();
+        if (e.shiftKey) this.ungroupSelection();
+        else this.groupSelection();
+        return;
+      }
+    }
+
     if (e.key === 'Delete') {
+      if (this.isTypingTarget(e.target)) return;
       this.deleteSelected();
       return;
     }
@@ -442,45 +503,221 @@ Pan & zoom:
     return 'crosshair';
   }
 
-  // -------------------- Ctrl/?click toggle multi-select --------------------
-  ctrlToggleSelection(target) {
-    if (!target) return;
+  // -------------------- Semantic objects / grouping --------------------
+  getSemanticObjects(root = null) {
+    const out = [];
+    const visit = (obj) => {
+      if (!obj) return;
+      const kind = obj.data && obj.data.kind;
+      if (kind === 'control') return;
+      if (kind === 'point' || kind === 'line' || kind === 'ellipse') {
+        out.push(obj);
+        return;
+      }
+      if (obj.getObjects) obj.getObjects().forEach(visit);
+    };
 
+    if (root == null) this.canvas.getObjects().forEach(visit);
+    else if (Array.isArray(root)) root.forEach(visit);
+    else visit(root);
+    return out;
+  }
+
+  getObjectWorldCenter(obj) {
+    if (!obj) return { x: 0, y: 0 };
+    try {
+      const matrix = obj.calcTransformMatrix();
+      const p = fabric.util.transformPoint(new fabric.Point(0, 0), matrix);
+      if (Number.isFinite(p.x) && Number.isFinite(p.y)) return { x: p.x, y: p.y };
+    } catch (e) {
+      // Fall through to Fabric's center helper for unusual enlivened objects.
+    }
+    const center = obj.getCenterPoint ? obj.getCenterPoint() : null;
+    return {
+      x: center && Number.isFinite(center.x) ? center.x : this.valOr(obj.left, 0),
+      y: center && Number.isFinite(center.y) ? center.y : this.valOr(obj.top, 0)
+    };
+  }
+
+  syncLineTreeToWorld(root) {
+    this.getSemanticObjects(root).forEach(obj => {
+      if (obj.data && obj.data.kind === 'line') this.updateLineDataOnMove(obj);
+    });
+  }
+
+  configureMovableSelection(obj) {
+    if (!obj) return;
+    obj.set({
+      hasControls: false,
+      lockScalingX: true,
+      lockScalingY: true,
+      lockRotation: true
+    });
+    obj.setCoords();
+  }
+
+  updateSelectionActionState() {
+    if (!this.canvas) return;
     const active = this.canvas.getActiveObject();
+    const semanticCount = active ? this.getSemanticObjects(active).length : 0;
+    const duplicateBtn = document.getElementById('duplicateBtn');
+    const groupBtn = document.getElementById('groupBtn');
+    const ungroupBtn = document.getElementById('ungroupBtn');
 
-    if (!active) {
-      this.canvas.setActiveObject(target);
-      this.canvas.requestRenderAll();
+    if (duplicateBtn) duplicateBtn.disabled = !(semanticCount > 0 || this.selectedLabelId != null);
+    if (groupBtn) groupBtn.disabled = !(active && active.type === 'activeSelection' && semanticCount > 1);
+    if (ungroupBtn) ungroupBtn.disabled = !(active && active.data && active.data.kind === 'selectionGroup');
+  }
+
+  groupSelection() {
+    const active = this.canvas.getActiveObject();
+    if (!active || active.type !== 'activeSelection' || this.getSemanticObjects(active).length < 2) return;
+
+    this.hideCurveHandle();
+    this.syncLineTreeToWorld(active);
+    this.isBulkUpdating = true;
+    let group = null;
+    try {
+      group = active.toGroup();
+      group.data = { kind: 'selectionGroup', id: ++this.objectId };
+      this.configureMovableSelection(group);
+      this.canvas.setActiveObject(group);
+    } finally {
+      this.isBulkUpdating = false;
+    }
+    if (!group) return;
+
+    this.canvas.requestRenderAll();
+    this.generateTikZCode({ forceWriteEditor: false });
+    this.pushHistoryDebounced('group');
+    this.updateSelectionActionState();
+  }
+
+  ungroupSelection() {
+    const group = this.canvas.getActiveObject();
+    if (!group || !group.data || group.data.kind !== 'selectionGroup' || !group.toActiveSelection) return;
+
+    this.syncLineTreeToWorld(group);
+    this.isBulkUpdating = true;
+    let selection = null;
+    try {
+      selection = group.toActiveSelection();
+      this.configureMovableSelection(selection);
+      this.canvas.setActiveObject(selection);
+      this.syncLineTreeToWorld(selection);
+    } finally {
+      this.isBulkUpdating = false;
+    }
+    if (!selection) return;
+
+    this.canvas.requestRenderAll();
+    this.generateTikZCode({ forceWriteEditor: false });
+    this.pushHistoryDebounced('ungroup');
+    this.updateSelectionActionState();
+  }
+
+  reassignObjectIds(root) {
+    const visit = (obj) => {
+      if (!obj) return;
+      const kind = obj.data && obj.data.kind;
+      if (kind === 'control') return;
+      if (kind === 'point' || kind === 'line' || kind === 'ellipse') {
+        obj.data.id = ++this.objectId;
+        return;
+      }
+      if (kind === 'selectionGroup') obj.data.id = ++this.objectId;
+      if (obj.getObjects) obj.getObjects().forEach(visit);
+    };
+    visit(root);
+  }
+
+  getMaxObjectId(root = null) {
+    let max = 0;
+    const visit = (obj) => {
+      if (!obj) return;
+      const id = obj.data && Number(obj.data.id);
+      if (Number.isFinite(id)) max = Math.max(max, id);
+      const kind = obj.data && obj.data.kind;
+      if (kind !== 'line' && obj.getObjects) obj.getObjects().forEach(visit);
+    };
+    if (root == null) this.canvas.getObjects().forEach(visit);
+    else if (Array.isArray(root)) root.forEach(visit);
+    else visit(root);
+    return max;
+  }
+
+  duplicateSelected() {
+    const source = this.canvas.getActiveObject();
+    if (!source) {
+      const label = this.labels.find(l => l.id === this.selectedLabelId);
+      if (!label) return;
+      const offset = this.snapToGrid ? this.gridSize : 20;
+      const bind = label.bind ? { ...label.bind } : null;
+      if (bind && bind.targetId && bind.anchor && bind.anchor !== 'none') {
+        bind.dx = this.valOr(bind.dx, 0) + offset;
+        bind.dy = this.valOr(bind.dy, 0) + offset;
+      }
+      this.addLabelDirect(label.x + offset, label.y + offset, label.tex, bind);
+      this.pushHistoryDebounced('duplicate-label');
+      this.updateSelectionActionState();
       return;
     }
 
-    if (active.type === 'activeSelection') {
-      const objects = active.getObjects();
-      const exists = objects.includes(target);
+    if (!this.getSemanticObjects(source).length || !source.clone) return;
+    this.hideCurveHandle();
+    const offset = this.snapToGrid ? this.gridSize : 20;
 
-      if (exists) {
-        active.removeWithUpdate(target);
-        if (active.size() === 1) this.canvas.setActiveObject(active.item(0));
-        else this.canvas.setActiveObject(active);
-      } else {
-        active.addWithUpdate(target);
-        this.canvas.setActiveObject(active);
+    source.clone((clone) => {
+      if (!clone) return;
+      this.isBulkUpdating = true;
+      try {
+        this.canvas.discardActiveObject();
+        clone.set({
+          left: this.valOr(source.left, 0) + offset,
+          top: this.valOr(source.top, 0) + offset,
+          evented: true
+        });
+        this.reassignObjectIds(clone);
+
+        if (clone.type === 'activeSelection') {
+          clone.canvas = this.canvas;
+          clone.forEachObject(obj => this.canvas.add(obj));
+          this.configureMovableSelection(clone);
+          clone.setCoords();
+          this.syncLineTreeToWorld(clone);
+          this.canvas.setActiveObject(clone);
+        } else {
+          this.canvas.add(clone);
+          if (clone.data && clone.data.kind === 'selectionGroup') this.configureMovableSelection(clone);
+          clone.setCoords();
+          this.syncLineTreeToWorld(clone);
+          this.canvas.setActiveObject(clone);
+        }
+      } finally {
+        this.isBulkUpdating = false;
       }
 
       this.canvas.requestRenderAll();
-      return;
-    }
-
-    if (active !== target) {
-      const sel = new fabric.ActiveSelection([active, target], { canvas: this.canvas });
-      this.canvas.setActiveObject(sel);
-      this.canvas.requestRenderAll();
-    }
+      this.generateTikZCode({ forceWriteEditor: false });
+      this.pushHistoryDebounced('duplicate');
+      this.updateSelectionActionState();
+    }, ['data']);
   }
 
   // -------------------- Selection helpers --------------------
   onSelectionChanged(selected) {
-    const obj = (selected && selected[0]) || this.canvas.getActiveObject();
+    const active = this.canvas.getActiveObject();
+    this.updateSelectionActionState();
+
+    if (active && active.type === 'activeSelection') {
+      this.hideCurveHandle();
+      this.configureMovableSelection(active);
+      const firstLine = this.getSemanticObjects(active).find(o => o && o.data && o.data.kind === 'line');
+      if (firstLine) this.syncLineStyleUI(firstLine);
+      return;
+    }
+
+    const obj = active || (selected && selected[0]);
     if (obj && obj.data && obj.data.kind === 'control') {
       const target = this.getLineById(obj.data.targetId);
       if (target) {
@@ -501,23 +738,30 @@ Pan & zoom:
 
   onSelectionCleared() {
     this.hideCurveHandle();
+    this.updateSelectionActionState();
   }
 
   onObjectMoving(obj) {
-    if (!obj || !obj.data) return;
-    if (obj.data.kind === 'line') {
-      this.updateLineDataOnMove(obj);
+    if (!obj) return;
+    if (obj.data && obj.data.kind === 'control') return;
+
+    this.snapObjectToGrid(obj);
+    this.syncLineTreeToWorld(obj);
+
+    if (this.getSemanticObjects(obj).some(item => item.data && item.data.kind === 'line')) {
       this.renderAllLabels();
-      this.updateCurveHandlePosition(obj);
+      if (obj.data && obj.data.kind === 'line') this.updateCurveHandlePosition(obj);
     }
   }
 
   onObjectModified(obj) {
-    if (!obj || !obj.data) return;
-    if (obj.data.kind === 'line') {
-      this.updateLineDataOnMove(obj);
+    if (!obj) return;
+
+    this.syncLineTreeToWorld(obj);
+
+    if (obj.data && obj.data.kind === 'line') {
       this.updateCurveHandlePosition(obj);
-    } else if (obj.data.kind === 'ellipse') {
+    } else if (obj.data && obj.data.kind === 'ellipse') {
       const rx = this.valOr(obj.rx, 0) * this.valOr(obj.scaleX, 1);
       const ry = this.valOr(obj.ry, 0) * this.valOr(obj.scaleY, 1);
       obj.set({ rx, ry, scaleX: 1, scaleY: 1 });
@@ -528,10 +772,22 @@ Pan & zoom:
   }
 
   updateLineDataOnMove(obj) {
-    const lastLeft = this.valOr(obj.data.lastLeft, this.valOr(obj.left, 0));
-    const lastTop = this.valOr(obj.data.lastTop, this.valOr(obj.top, 0));
-    const dx = this.valOr(obj.left, 0) - lastLeft;
-    const dy = this.valOr(obj.top, 0) - lastTop;
+    if (!obj || !obj.data || obj.data.kind !== 'line') return;
+    const center = this.getObjectWorldCenter(obj);
+    const lastX = Number(obj.data.lastLeft);
+    const lastY = Number(obj.data.lastTop);
+
+    // Curves are centred on their visual bounds, not on the midpoint of their
+    // endpoints. Keep translations separate from curvature/bounds changes by
+    // measuring movement from the last world-space visual centre.
+    if (!Number.isFinite(lastX) || !Number.isFinite(lastY)) {
+      obj.data.lastLeft = center.x;
+      obj.data.lastTop = center.y;
+      return;
+    }
+
+    const dx = center.x - lastX;
+    const dy = center.y - lastY;
     if (dx === 0 && dy === 0) return;
 
     obj.data.start.x += dx;
@@ -542,8 +798,8 @@ Pan & zoom:
       obj.data.ctrl.x += dx;
       obj.data.ctrl.y += dy;
     }
-    obj.data.lastLeft = this.valOr(obj.left, 0);
-    obj.data.lastTop = this.valOr(obj.top, 0);
+    obj.data.lastLeft = center.x;
+    obj.data.lastTop = center.y;
   }
 
   showLineHandleFor(obj) {
@@ -571,13 +827,19 @@ Pan & zoom:
       handle.data = { kind: 'control', targetId: obj.data.id, role };
       handle.excludeFromExport = true;
       handle.on('moving', () => {
-        const hx = this.valOr(handle.left, 0);
-        const hy = this.valOr(handle.top, 0);
+        const snapped = this.snapPoint({
+          x: this.valOr(handle.left, 0),
+          y: this.valOr(handle.top, 0)
+        });
+        handle.set({ left: snapped.x, top: snapped.y });
+        const hx = snapped.x;
+        const hy = snapped.y;
         if (role === 'start') obj.data.start = { x: hx, y: hy };
         if (role === 'end') obj.data.end = { x: hx, y: hy };
         if (role === 'ctrl') obj.data.ctrl = { x: hx, y: hy };
         this.updateLineObject(obj, { keepPosition: false });
         this.renderAllLabels();
+        this.generateTikZCode({ forceWriteEditor: false });
       });
         handle.on('modified', () => {
           const hx = this.valOr(handle.left, 0);
@@ -597,9 +859,31 @@ Pan & zoom:
       return handle;
     };
 
+    const makeGuide = (from, to, role) => {
+      const guide = new fabric.Line([from.x, from.y, to.x, to.y], {
+        stroke: '#3f51b5',
+        strokeWidth: 1,
+        strokeDashArray: [5, 5],
+        opacity: 0.55,
+        selectable: false,
+        evented: false,
+        objectCaching: false
+      });
+      guide.data = { kind: 'control', targetId: obj.data.id, role, passive: true };
+      guide.excludeFromExport = true;
+      return guide;
+    };
+
     this.curveHandles.start = makeHandle(obj.data.start.x, obj.data.start.y, 'start', '#e3f2fd');
     this.curveHandles.end = makeHandle(obj.data.end.x, obj.data.end.y, 'end', '#e3f2fd');
     this.curveHandles.ctrl = isCurve && ctrl ? makeHandle(ctrl.x, ctrl.y, 'ctrl', '#ffffff') : null;
+
+    if (isCurve && ctrl) {
+      this.curveHandles.guideStart = makeGuide(obj.data.start, ctrl, 'guide-start');
+      this.curveHandles.guideEnd = makeGuide(ctrl, obj.data.end, 'guide-end');
+      this.canvas.add(this.curveHandles.guideStart);
+      this.canvas.add(this.curveHandles.guideEnd);
+    }
 
     this.canvas.add(this.curveHandles.start);
     this.canvas.add(this.curveHandles.end);
@@ -613,7 +897,7 @@ Pan & zoom:
   hideCurveHandle() {
     const handles = this.curveHandles;
     if (!handles) return;
-    ['start', 'end', 'ctrl'].forEach(role => {
+    ['guideStart', 'guideEnd', 'start', 'end', 'ctrl'].forEach(role => {
       if (handles[role]) this.canvas.remove(handles[role]);
       handles[role] = null;
     });
@@ -623,8 +907,8 @@ Pan & zoom:
   updateCurveHandlePosition(obj) {
     const handles = this.curveHandles;
     if (!handles || !obj || !obj.data) return;
+    const ctrl = obj.data.ctrl ? obj.data.ctrl : this.getDefaultCurveCtrl(obj.data.start, obj.data.end);
     if (handles.ctrl && handles.ctrl.data && handles.ctrl.data.targetId === obj.data.id) {
-      const ctrl = obj.data.ctrl ? obj.data.ctrl : this.getDefaultCurveCtrl(obj.data.start, obj.data.end);
       handles.ctrl.set({ left: ctrl.x, top: ctrl.y });
       handles.ctrl.setCoords();
     }
@@ -635,6 +919,24 @@ Pan & zoom:
     if (handles.end) {
       handles.end.set({ left: obj.data.end.x, top: obj.data.end.y });
       handles.end.setCoords();
+    }
+    if (handles.guideStart) {
+      handles.guideStart.set({
+        x1: obj.data.start.x,
+        y1: obj.data.start.y,
+        x2: ctrl.x,
+        y2: ctrl.y
+      });
+      handles.guideStart.setCoords();
+    }
+    if (handles.guideEnd) {
+      handles.guideEnd.set({
+        x1: ctrl.x,
+        y1: ctrl.y,
+        x2: obj.data.end.x,
+        y2: obj.data.end.y
+      });
+      handles.guideEnd.setCoords();
     }
     this.canvas.requestRenderAll();
   }
@@ -653,6 +955,122 @@ Pan & zoom:
     const x = (clientX - rect.left) * (this.canvas.getWidth() / rect.width);
     const y = (clientY - rect.top) * (this.canvas.getHeight() / rect.height);
     return new fabric.Point(x, y);
+  }
+
+  // -------------------- Grid & snapping --------------------
+  initGridSettings() {
+    const snapToggle = document.getElementById('snapToGridToggle');
+    const sizeInput = document.getElementById('gridSizeInput');
+    let saved = null;
+    try {
+      saved = JSON.parse(localStorage.getItem('feyndraw-grid-settings') || 'null');
+    } catch (e) {
+      saved = null;
+    }
+
+    const initialSize = saved && Number.isFinite(Number(saved.size))
+      ? Number(saved.size)
+      : Number(sizeInput && sizeInput.value);
+    this.gridSize = this.normalizeGridSize(initialSize || 20);
+    this.snapToGrid = saved && typeof saved.snap === 'boolean'
+      ? saved.snap
+      : !!(snapToggle ? snapToggle.checked : true);
+    this.gridVisible = saved && typeof saved.visible === 'boolean' ? saved.visible : true;
+
+    if (sizeInput) sizeInput.value = String(this.gridSize);
+    if (snapToggle) snapToggle.checked = this.snapToGrid;
+    const gridBtn = document.getElementById('gridToggleBtn');
+    if (gridBtn) gridBtn.classList.toggle('active', this.gridVisible);
+    this.updateGridVisual();
+  }
+
+  normalizeGridSize(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return 20;
+    return Math.max(5, Math.min(100, Math.round(n)));
+  }
+
+  persistGridSettings() {
+    try {
+      localStorage.setItem('feyndraw-grid-settings', JSON.stringify({
+        size: this.gridSize,
+        snap: this.snapToGrid,
+        visible: this.gridVisible
+      }));
+    } catch (e) {
+      // Storage can be unavailable in private/file contexts; controls still work.
+    }
+  }
+
+  setSnapToGrid(enabled) {
+    this.snapToGrid = !!enabled;
+    const toggle = document.getElementById('snapToGridToggle');
+    if (toggle) toggle.checked = this.snapToGrid;
+    this.persistGridSettings();
+  }
+
+  setGridSize(value, { commit = true } = {}) {
+    if (value === '' || !Number.isFinite(Number(value))) return;
+    this.gridSize = this.normalizeGridSize(value);
+    const input = document.getElementById('gridSizeInput');
+    if (commit && input) input.value = String(this.gridSize);
+    this.updateGridVisual();
+    if (commit) this.persistGridSettings();
+  }
+
+  snapPoint(point) {
+    if (!point || !this.snapToGrid) return point;
+    const size = this.gridSize || 20;
+    return {
+      x: Math.round(point.x / size) * size,
+      y: Math.round(point.y / size) * size
+    };
+  }
+
+  snapObjectToGrid(obj) {
+    if (!this.snapToGrid || !obj || (obj.data && obj.data.kind === 'control')) return;
+    const semantic = this.getSemanticObjects(obj);
+    let anchor = this.getObjectWorldCenter(obj);
+    const firstLine = semantic.find(item => item.data && item.data.kind === 'line');
+    if (firstLine) {
+      const center = this.getObjectWorldCenter(firstLine);
+      const lastX = Number(firstLine.data.lastLeft);
+      const lastY = Number(firstLine.data.lastTop);
+      const baseX = Number.isFinite(lastX) ? lastX : center.x;
+      const baseY = Number.isFinite(lastY) ? lastY : center.y;
+      anchor = {
+        x: firstLine.data.start.x + center.x - baseX,
+        y: firstLine.data.start.y + center.y - baseY
+      };
+    } else if (semantic.length) {
+      anchor = this.getObjectWorldCenter(semantic[0]);
+    }
+
+    const snapped = this.snapPoint(anchor);
+    const dx = snapped.x - anchor.x;
+    const dy = snapped.y - anchor.y;
+    if (Math.abs(dx) < 0.001 && Math.abs(dy) < 0.001) return;
+    obj.set({
+      left: this.valOr(obj.left, 0) + dx,
+      top: this.valOr(obj.top, 0) + dy
+    });
+    obj.setCoords();
+  }
+
+  updateGridVisual() {
+    const grid = document.querySelector('.canvas-grid');
+    if (!grid || !this.canvas) return;
+    grid.style.display = this.gridVisible ? 'block' : 'none';
+    if (!this.gridVisible) return;
+
+    const vt = this.canvas.viewportTransform || [1, 0, 0, 1, 0, 0];
+    const zoomX = Math.abs(vt[0]) || this.canvas.getZoom() || 1;
+    const zoomY = Math.abs(vt[3]) || this.canvas.getZoom() || 1;
+    const cellX = Math.max(2, this.gridSize * zoomX);
+    const cellY = Math.max(2, this.gridSize * zoomY);
+    const mod = (n, size) => ((n % size) + size) % size;
+    grid.style.backgroundSize = `${cellX}px ${cellY}px`;
+    grid.style.backgroundPosition = `${mod(vt[4] || 0, cellX)}px ${mod(vt[5] || 0, cellY)}px`;
   }
 
   // -------------------- Panning --------------------
@@ -687,6 +1105,7 @@ Pan & zoom:
 
   // -------------------- Mouse handlers --------------------
   startDrawAtPoint(p) {
+    p = this.snapPoint(p);
     this.drawPrevSelection = this.canvas.selection;
     this.drawPrevTargetFind = this.canvas.skipTargetFind;
     this.canvas.selection = false;
@@ -744,6 +1163,8 @@ Pan & zoom:
 
   updateDrawToPoint(p) {
     if (!this.isDrawing || !this.tempObj) return;
+    p = this.snapPoint(p);
+    this.lastPointer = p;
 
     if (this.tool === 'ellipse') {
       const start = this.drawStart;
@@ -768,8 +1189,8 @@ Pan & zoom:
       ctrl,
       lineStyle: paint.lineStyle
     });
-    const parsedPath = new fabric.Path(pathStr, { fill: null }).path;
-    this.tempObj.set({ path: parsedPath, strokeDashArray: this.getDashArray(paint.lineStyle) });
+    this.replacePathGeometry(this.tempObj, pathStr);
+    this.tempObj.set({ strokeDashArray: this.getDashArray(paint.lineStyle) });
     this.tempObj.setCoords();
     this.canvas.requestRenderAll();
   }
@@ -841,15 +1262,7 @@ Pan & zoom:
       return;
     }
 
-    // Ctrl/?click toggle multi-select (select tool only)
-    if (this.tool === 'select' && opt.target && (opt.e.ctrlKey || opt.e.metaKey)) {
-      opt.e.preventDefault();
-      opt.e.stopPropagation();
-      this.ctrlToggleSelection(opt.target);
-      return;
-    }
-
-    const p = this.canvas.getPointer(opt.e);
+    const p = this.snapPoint(this.canvas.getPointer(opt.e));
     this.lastPointer = p;
 
     const cp = document.getElementById('cursorPos');
@@ -918,7 +1331,7 @@ Pan & zoom:
       return;
     }
 
-    const p = this.canvas.getPointer(opt.e);
+    const p = this.snapPoint(this.canvas.getPointer(opt.e));
     this.lastPointer = p;
 
     const cp = document.getElementById('cursorPos');
@@ -1032,7 +1445,7 @@ Pan & zoom:
 
     if (ev.touches.length === 1) {
       const t = ev.touches[0];
-      const p = this.canvasPointFromClient(t.clientX, t.clientY);
+      const p = this.snapPoint(this.canvasPointFromClient(t.clientX, t.clientY));
       this.lastPointer = { x: p.x, y: p.y };
 
       if (this.tool === 'hand') {
@@ -1125,7 +1538,7 @@ Pan & zoom:
 
     if (ev.touches.length === 1) {
       const t = ev.touches[0];
-      const p = this.canvasPointFromClient(t.clientX, t.clientY);
+      const p = this.snapPoint(this.canvasPointFromClient(t.clientX, t.clientY));
       this.lastPointer = { x: p.x, y: p.y };
 
       if (this.tool === 'hand' && this.isPanning) {
@@ -1194,6 +1607,24 @@ Pan & zoom:
     return { x: mx + nx * offset, y: my + ny * offset };
   }
 
+  replacePathGeometry(pathObj, pathString) {
+    if (!pathObj || !pathString) return;
+    const measured = new fabric.Path(pathString, {
+      fill: null,
+      strokeWidth: this.valOr(pathObj.strokeWidth, 1)
+    });
+    const offset = measured.pathOffset || { x: 0, y: 0 };
+    pathObj.set({
+      path: measured.path,
+      width: measured.width,
+      height: measured.height,
+      pathOffset: { x: offset.x, y: offset.y },
+      left: measured.left,
+      top: measured.top,
+      dirty: true
+    });
+  }
+
   buildLinePath({ lineType, start, end, ctrl, lineStyle }) {
     if (lineType === 'curve') {
       const c = ctrl ? ctrl : this.getDefaultCurveCtrl(start, end);
@@ -1214,11 +1645,16 @@ Pan & zoom:
     const nx = -uy, ny = ux;
 
     const steps = Math.max(26, Math.floor(L / 1.5));
-    const k = (2 * Math.PI) / wavelength;
+    const cycles = Math.max(1, Math.round(L / wavelength));
+    const k = (2 * Math.PI * cycles) / L;
 
     let d = `M ${p1.x} ${p1.y}`;
     for (let i = 1; i <= steps; i++) {
       const s = (L * i) / steps;
+      if (i === steps) {
+        d += ` L ${p2.x} ${p2.y}`;
+        continue;
+      }
       const off = amplitude * Math.sin(k * s);
       d += ` L ${p1.x + ux * s + nx * off} ${p1.y + uy * s + ny * off}`;
     }
@@ -1232,13 +1668,21 @@ Pan & zoom:
     const nx = -uy, ny = ux;
 
     const steps = Math.max(42, Math.floor(L / 0.9));
-    const k = (2 * Math.PI) / wavelength;
+    const cycles = Math.max(1, Math.round(L / wavelength));
+    const k = (2 * Math.PI * cycles) / L;
+    const fadeLength = Math.min(wavelength, L / 2);
 
     let d = `M ${p1.x} ${p1.y}`;
     for (let i = 1; i <= steps; i++) {
       const s = (L * i) / steps;
-      const nOff = amplitude * Math.cos(k * s);
-      const tOff = amplitude * 0.25 * Math.sin(k * s);
+      if (i === steps) {
+        d += ` L ${p2.x} ${p2.y}`;
+        continue;
+      }
+      const edgeRatio = Math.min(1, Math.min(s, L - s) / (fadeLength || 1));
+      const envelope = edgeRatio * edgeRatio * (3 - 2 * edgeRatio);
+      const nOff = amplitude * Math.cos(k * s) * envelope;
+      const tOff = amplitude * 0.25 * Math.sin(k * s) * envelope;
       d += ` L ${p1.x + ux * (s + tOff) + nx * nOff} ${p1.y + uy * (s + tOff) + ny * nOff}`;
     }
     return d;
@@ -1246,51 +1690,70 @@ Pan & zoom:
 
   pathWavyOnCurve(p0, p1, p2, { amplitude = 2.6, wavelength = 15 } = {}) {
     const steps = 96;
-    const k = (2 * Math.PI) / wavelength;
-
+    const curve = this.sampleCurveByArcLength(p0, p1, p2, steps);
+    const total = curve.total || 1;
+    const cycles = Math.max(1, Math.round(total / wavelength));
+    const k = (2 * Math.PI * cycles) / total;
     let d = `M ${p0.x} ${p0.y}`;
-    let last = { x: p0.x, y: p0.y };
-    let s = 0;
-
-    for (let i = 1; i <= steps; i++) {
-      const t = i / steps;
-      const pt = this.sampleCubic(p0, p1, p1, p2, t);
-      const tang = this.cubicTangent(p0, p1, p1, p2, t);
+    curve.samples.forEach((sample, index) => {
+      if (index === curve.samples.length - 1) {
+        d += ` L ${p2.x} ${p2.y}`;
+        return;
+      }
+      const { pt, tang, s } = sample;
       const L = Math.hypot(tang.x, tang.y) || 1;
       const nx = -tang.y / L;
       const ny = tang.x / L;
-      s += Math.hypot(pt.x - last.x, pt.y - last.y);
       const off = amplitude * Math.sin(k * s);
       d += ` L ${pt.x + nx * off} ${pt.y + ny * off}`;
-      last = pt;
-    }
+    });
     return d;
   }
 
   pathSpringOnCurve(p0, p1, p2, { amplitude = 5, wavelength = 7 } = {}) {
     const steps = 140;
-    const k = (2 * Math.PI) / wavelength;
-
+    const curve = this.sampleCurveByArcLength(p0, p1, p2, steps);
+    const total = curve.total || 1;
+    const cycles = Math.max(1, Math.round(total / wavelength));
+    const k = (2 * Math.PI * cycles) / total;
+    const fadeLength = Math.min(wavelength, total / 2);
     let d = `M ${p0.x} ${p0.y}`;
-    let last = { x: p0.x, y: p0.y };
-    let s = 0;
-
-    for (let i = 1; i <= steps; i++) {
-      const t = i / steps;
-      const pt = this.sampleCubic(p0, p1, p1, p2, t);
-      const tang = this.cubicTangent(p0, p1, p1, p2, t);
+    curve.samples.forEach((sample, index) => {
+      if (index === curve.samples.length - 1) {
+        d += ` L ${p2.x} ${p2.y}`;
+        return;
+      }
+      const { pt, tang, s } = sample;
       const L = Math.hypot(tang.x, tang.y) || 1;
       const ux = tang.x / L;
       const uy = tang.y / L;
       const nx = -uy;
       const ny = ux;
-      s += Math.hypot(pt.x - last.x, pt.y - last.y);
-      const nOff = amplitude * Math.cos(k * s);
-      const tOff = amplitude * 0.25 * Math.sin(k * s);
+      const edgeRatio = Math.min(1, Math.min(s, total - s) / (fadeLength || 1));
+      const envelope = edgeRatio * edgeRatio * (3 - 2 * edgeRatio);
+      const nOff = amplitude * Math.cos(k * s) * envelope;
+      const tOff = amplitude * 0.25 * Math.sin(k * s) * envelope;
       d += ` L ${pt.x + nx * nOff + ux * tOff} ${pt.y + ny * nOff + uy * tOff}`;
+    });
+    return d;
+  }
+
+  sampleCurveByArcLength(p0, p1, p2, steps) {
+    const samples = [];
+    let last = { x: p0.x, y: p0.y };
+    let total = 0;
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      const pt = this.sampleCubic(p0, p1, p1, p2, t);
+      total += Math.hypot(pt.x - last.x, pt.y - last.y);
+      samples.push({
+        pt,
+        tang: this.cubicTangent(p0, p1, p1, p2, t),
+        s: total
+      });
       last = pt;
     }
-    return d;
+    return { samples, total };
   }
 
   sampleCubic(p0, p1, p2, p3, t) {
@@ -1348,8 +1811,10 @@ Pan & zoom:
     });
 
     group.data = data;
-    group.data.lastLeft = this.valOr(group.left, 0);
-    group.data.lastTop = this.valOr(group.top, 0);
+    this.alignLineGroupToAnchor(group, localData.start, data.start);
+    const worldCenter = this.getObjectWorldCenter(group);
+    group.data.lastLeft = worldCenter.x;
+    group.data.lastTop = worldCenter.y;
 
     return group;
   }
@@ -1358,7 +1823,7 @@ Pan & zoom:
     if (!obj || !obj.data || obj.data.kind !== 'line') return;
 
     const keepPosition = opts && opts.keepPosition;
-    const targetCenter = keepPosition ? obj.getCenterPoint() : this.getLineCenter(obj.data);
+    const targetCenter = keepPosition ? this.getObjectWorldCenter(obj) : this.getLineCenter(obj.data);
     const localData = this.shiftLineData(obj.data, -targetCenter.x, -targetCenter.y);
     const parts = this.buildLineParts(localData);
 
@@ -1370,11 +1835,14 @@ Pan & zoom:
     });
     obj._calcBounds();
     obj._updateObjectsCoords();
-    obj.setPositionByOrigin(targetCenter, 'center', 'center');
+    const parentPoint = this.worldPointToParent(obj, targetCenter);
+    obj.setPositionByOrigin(parentPoint, 'center', 'center');
+    this.alignLineGroupToAnchor(obj, localData.start, obj.data.start);
     obj.setCoords();
     obj.dirty = true;
-    obj.data.lastLeft = this.valOr(obj.left, 0);
-    obj.data.lastTop = this.valOr(obj.top, 0);
+    const worldCenter = this.getObjectWorldCenter(obj);
+    obj.data.lastLeft = worldCenter.x;
+    obj.data.lastTop = worldCenter.y;
     this.canvas.requestRenderAll();
 
     if (this.curveHandles && (this.curveHandles.start || this.curveHandles.end || this.curveHandles.ctrl)) {
@@ -1391,6 +1859,65 @@ Pan & zoom:
     const ex = this.valOr(data.end && data.end.x, 0);
     const ey = this.valOr(data.end && data.end.y, 0);
     return { x: (sx + ex) / 2, y: (sy + ey) / 2 };
+  }
+
+  worldPointToParent(obj, point) {
+    if (!obj || !obj.group || !obj.group.calcTransformMatrix) return new fabric.Point(point.x, point.y);
+    try {
+      const inverse = fabric.util.invertTransform(obj.group.calcTransformMatrix());
+      return fabric.util.transformPoint(new fabric.Point(point.x, point.y), inverse);
+    } catch (e) {
+      return new fabric.Point(point.x, point.y);
+    }
+  }
+
+  worldVectorToParent(obj, dx, dy) {
+    if (!obj || !obj.group || !obj.group.calcTransformMatrix) return { x: dx, y: dy };
+    try {
+      const inverse = fabric.util.invertTransform(obj.group.calcTransformMatrix());
+      const p0 = fabric.util.transformPoint(new fabric.Point(0, 0), inverse);
+      const p1 = fabric.util.transformPoint(new fabric.Point(dx, dy), inverse);
+      return { x: p1.x - p0.x, y: p1.y - p0.y };
+    } catch (e) {
+      return { x: dx, y: dy };
+    }
+  }
+
+  getPathSourcePointWorld(pathObj, sourcePoint) {
+    if (!pathObj || !sourcePoint || !pathObj.calcTransformMatrix) return null;
+    const offset = pathObj.pathOffset || { x: 0, y: 0 };
+    const localPoint = new fabric.Point(
+      sourcePoint.x - this.valOr(offset.x, 0),
+      sourcePoint.y - this.valOr(offset.y, 0)
+    );
+    try {
+      return fabric.util.transformPoint(localPoint, pathObj.calcTransformMatrix());
+    } catch (e) {
+      return null;
+    }
+  }
+
+  alignLineGroupToAnchor(group, localAnchor, worldAnchor) {
+    if (!group || !localAnchor || !worldAnchor) return;
+    const parts = group.getObjects ? group.getObjects() : group._objects;
+    const mainPath = parts && parts[0];
+    if (!mainPath) return;
+
+    group.setCoords();
+    mainPath.setCoords();
+    const renderedAnchor = this.getPathSourcePointWorld(mainPath, localAnchor);
+    if (!renderedAnchor) return;
+
+    const dx = worldAnchor.x - renderedAnchor.x;
+    const dy = worldAnchor.y - renderedAnchor.y;
+    if (Math.abs(dx) < 0.000001 && Math.abs(dy) < 0.000001) return;
+
+    const localDelta = this.worldVectorToParent(group, dx, dy);
+    group.set({
+      left: this.valOr(group.left, 0) + localDelta.x,
+      top: this.valOr(group.top, 0) + localDelta.y
+    });
+    group.setCoords();
   }
 
   shiftLineData(data, dx, dy) {
@@ -1423,8 +1950,7 @@ Pan & zoom:
       evented: false,
       objectCaching: false
     });
-    lineObj.set({ originX: 'center', originY: 'center', left: 0, top: 0 });
-    lineObj.setCoords();
+    this.placePathInSourcePlane(lineObj);
 
     const parts = [lineObj];
     const arrowPath = this.buildArrowPath(data, data.style.arrow);
@@ -1437,11 +1963,23 @@ Pan & zoom:
         evented: false,
         objectCaching: false
       });
-      arrowObj.setCoords();
+      this.placePathInSourcePlane(arrowObj);
       parts.push(arrowObj);
     }
 
     return parts;
+  }
+
+  placePathInSourcePlane(pathObj) {
+    if (!pathObj) return;
+    const offset = pathObj.pathOffset || { x: 0, y: 0 };
+    pathObj.set({
+      originX: 'center',
+      originY: 'center',
+      left: this.valOr(offset.x, 0),
+      top: this.valOr(offset.y, 0)
+    });
+    pathObj.setCoords();
   }
 
   buildArrowPath(data, arrowStyle) {
@@ -1577,8 +2115,10 @@ Pan & zoom:
     this.renderAllLabels();
     this.selectLabelById(id);
 
-    this.generateTikZCode({ forceWriteEditor: false });
-    this.pushHistoryDebounced('label');
+    if (!this.isBulkUpdating) {
+      this.generateTikZCode({ forceWriteEditor: false });
+      this.pushHistoryDebounced('label');
+    }
   }
 
   mountLabel(label) {
@@ -1629,8 +2169,12 @@ Pan & zoom:
       const p0 = fabric.util.transformPoint(new fabric.Point(0, 0), inv);
       const p1 = fabric.util.transformPoint(new fabric.Point(dxCanvasPx, dyCanvasPx), inv);
 
-      label.x = startWorld.x + (p1.x - p0.x);
-      label.y = startWorld.y + (p1.y - p0.y);
+      const snapped = this.snapPoint({
+        x: startWorld.x + (p1.x - p0.x),
+        y: startWorld.y + (p1.y - p0.y)
+      });
+      label.x = snapped.x;
+      label.y = snapped.y;
       if (label.bind && label.bind.targetId && label.bind.anchor && label.bind.anchor !== 'none') {
         const target = this.getLineById(label.bind.targetId);
         if (target) {
@@ -1705,12 +2249,14 @@ Pan & zoom:
     for (const l of this.labels) if (l.el) l.el.classList.toggle('selected', l.id === id);
     const label = this.labels.find(l => l.id === id);
     if (label) this.updateLabelBindingUI(label);
+    this.updateSelectionActionState();
   }
 
   clearLabelSelection() {
     this.selectedLabelId = null;
     for (const l of this.labels) if (l.el) l.el.classList.remove('selected');
     this.updateLabelBindingUI(null);
+    this.updateSelectionActionState();
   }
 
   updateLabelBindingUI(label) {
@@ -1812,7 +2358,7 @@ Pan & zoom:
   }
 
   getLineById(id) {
-    return this.canvas.getObjects().find(o => o && o.data && o.data.kind === 'line' && o.data.id === id) || null;
+    return this.getSemanticObjects().find(o => o && o.data && o.data.kind === 'line' && o.data.id === id) || null;
   }
 
   getLineAnchorPoint(lineObj, anchor) {
@@ -1926,6 +2472,42 @@ Pan & zoom:
   }
 
   // -------------------- TikZ: Copy / Apply / Export --------------------
+  setEditorDirty(dirty) {
+    this.editorDirty = !!dirty;
+    this.updateCodeActionState();
+  }
+
+  updateCodeActionState() {
+    const actions = document.querySelector('.code-actions');
+    const pngBtn = document.getElementById('exportPngBtn');
+    const svgBtn = document.getElementById('exportSvgBtn');
+    const copyBtn = document.getElementById('copyTikzBtn');
+    if (actions) actions.classList.toggle('editor-dirty', this.editorDirty);
+
+    if (this.editorDirty) {
+      if (pngBtn) {
+        pngBtn.innerHTML = `<i class="fas fa-sync-alt"></i><span class="action-label">${this.t('applyLabel')}</span>`;
+        pngBtn.title = this.t('applyPendingTitle');
+        pngBtn.classList.add('apply-pending');
+      }
+      if (svgBtn) svgBtn.hidden = true;
+      if (copyBtn) copyBtn.hidden = true;
+      return;
+    }
+
+    if (pngBtn) {
+      pngBtn.innerHTML = `<i class="fas fa-image"></i><span class="action-label">${this.t('exportPngLabel')}</span>`;
+      pngBtn.title = this.t('exportPngLabel');
+      pngBtn.classList.remove('apply-pending');
+    }
+    if (svgBtn) svgBtn.hidden = false;
+    if (copyBtn) {
+      copyBtn.hidden = false;
+      copyBtn.innerHTML = `<i class="fas fa-copy"></i><span class="action-label">${this.t('copyTikzLabel')}</span>`;
+      copyBtn.title = this.t('copyTikzLabel');
+    }
+  }
+
   copyTikZCode() {
     const code = this.tikzEditor ? this.tikzEditor.value : this.lastGeneratedTikZ;
     navigator.clipboard.writeText(code).catch(() => {});
@@ -1978,13 +2560,17 @@ Pan & zoom:
     this.applyParsedToCanvas(parsed);
 
     // Apply success: reset dirty and normalize editor to generated tikz
-    this.editorDirty = false;
+    this.setEditorDirty(false);
     this.generateTikZCode({ forceWriteEditor: true });
     this.pushHistoryDebounced('apply');
   }
 
   exportPNG() {
-    const dataURL = this.canvas.toDataURL({ format: 'png', quality: 1 });
+    const dataURL = this.withHiddenControlHandles(() => this.canvas.toDataURL({
+      format: 'png',
+      quality: 1,
+      multiplier: 2
+    }));
     const a = document.createElement('a');
     a.href = dataURL;
     a.download = 'feynman-diagram.png';
@@ -1993,20 +2579,83 @@ Pan & zoom:
     document.body.removeChild(a);
   }
 
+  exportSVG() {
+    const svg = this.withHiddenControlHandles(() => {
+      const base = this.canvas.toSVG({ suppressPreamble: false });
+      const labels = this.buildSVGLabels();
+      return base.replace(/<\/svg>\s*$/, `${labels}</svg>`);
+    });
+    const blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'feynman-diagram.svg';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  withHiddenControlHandles(callback) {
+    const handles = Object.values(this.curveHandles || {}).filter(Boolean);
+    const visibility = handles.map(handle => handle.visible !== false);
+    handles.forEach(handle => handle.set({ visible: false }));
+    this.canvas.renderAll();
+    try {
+      return callback();
+    } finally {
+      handles.forEach((handle, index) => handle.set({ visible: visibility[index] }));
+      this.canvas.requestRenderAll();
+    }
+  }
+
+  buildSVGLabels() {
+    if (!this.labels.length) return '';
+    const vt = this.canvas.viewportTransform || [1, 0, 0, 1, 0, 0];
+    const zoom = this.canvas.getZoom() || 1;
+    const escapeXML = (value) => String(value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&apos;');
+
+    const nodes = this.labels.map(label => {
+      this.syncLabelToBinding(label);
+      const p = fabric.util.transformPoint(new fabric.Point(label.x, label.y), vt);
+      const tex = this.stripDollar(label.tex);
+      const math = label.el && label.el.querySelector
+        ? label.el.querySelector('.katex-mathml math')
+        : null;
+      const fallback = `<text x="${p.x.toFixed(2)}" y="${p.y.toFixed(2)}" text-anchor="middle" dominant-baseline="central" font-family="Cambria Math, STIX Two Math, serif" font-size="${(18 * zoom).toFixed(2)}" data-tex="${escapeXML(tex)}">${escapeXML(tex)}</text>`;
+      if (!math) return fallback;
+
+      const rect = label.el.getBoundingClientRect();
+      const width = Math.max(80, rect.width + 24);
+      const height = Math.max(48, rect.height + 20);
+      const mathML = math.outerHTML.includes('xmlns=')
+        ? math.outerHTML
+        : math.outerHTML.replace('<math', '<math xmlns="http://www.w3.org/1998/Math/MathML"');
+      return `<switch data-tex="${escapeXML(tex)}"><foreignObject requiredExtensions="http://www.w3.org/1999/xhtml" x="${(p.x - width / 2).toFixed(2)}" y="${(p.y - height / 2).toFixed(2)}" width="${width.toFixed(2)}" height="${height.toFixed(2)}"><div xmlns="http://www.w3.org/1999/xhtml" style="display:flex;align-items:center;justify-content:center;width:100%;height:100%;color:#000;font-size:${(18 * zoom).toFixed(2)}px">${mathML}</div></foreignObject>${fallback}</switch>`;
+    });
+    return `<g id="feyndraw-labels">${nodes.join('')}</g>`;
+  }
+
     // -------------------- TikZ: Canvas -> Editor --------------------
   generateTikZCode({ forceWriteEditor = false } = {}) {
-    const objects = this.canvas.getObjects().filter(o => o && o.data && o.data.kind && o.data.kind !== 'control');
+    const objects = this.getSemanticObjects();
 
-    let tikz = `% Auto-generated by FeynmanDrawer\n`;
+    let tikz = `% Auto-generated by FeynDraw\n`;
     tikz += `% Editable subset: \\draw / \\node\n`;
-    tikz += `% Requires \\usetikzlibrary{decorations.pathmorphing,decorations.markings,arrows.meta}\n`;
+    tikz += `\\usetikzlibrary{decorations.pathmorphing,decorations.markings,arrows.meta}\n`;
     tikz += `\\begin{tikzpicture}\n`;
 
     // points
     const points = objects.filter(o => o.data.kind === 'point');
     points.forEach(p => {
+      const center = this.getObjectWorldCenter(p);
       const r = Math.max(0.04, this.valOr(p.radius, 3) / 20).toFixed(2);
-      tikz += `  \\fill (${this.toTikzCoordX(this.valOr(p.left, 0))}, ${this.toTikzCoordY(this.valOr(p.top, 0))}) circle (${r});\n`;
+      tikz += `  \\fill (${this.toTikzCoordX(center.x)}, ${this.toTikzCoordY(center.y)}) circle (${r});\n`;
     });
 
     // lines
@@ -2027,8 +2676,9 @@ Pan & zoom:
     // ellipses
     const ellipses = objects.filter(o => o.data.kind === 'ellipse');
     ellipses.forEach(el => {
-      const cx = this.valOr(el.left, 0);
-      const cy = this.valOr(el.top, 0);
+      const center = this.getObjectWorldCenter(el);
+      const cx = center.x;
+      const cy = center.y;
       const rx = this.valOr(el.rx, 10);
       const ry = this.valOr(el.ry, 8);
       const color = this.tikzColor(this.valOr(el.stroke, '#000000'));
@@ -2053,6 +2703,7 @@ Pan & zoom:
         this.isSyncingEditor = true;
         this.tikzEditor.value = tikz;
         this.isSyncingEditor = false;
+        this.setEditorDirty(false);
       }
     }
 
@@ -2113,6 +2764,11 @@ Pan & zoom:
         const line = raw.trim();
         if (!line || line.startsWith('%')) continue;
 
+        if (/^\\(?:begin|end)\s*\{tikzpicture\}/.test(line)
+          || /^\\usetikzlibrary\s*\{[^}]*\}\s*;?$/.test(line)) {
+          continue;
+        }
+
         // \fill (x,y) circle (r);
         let m = line.match(/\\fill\s*\(([^,]+),\s*([^\)]+)\)\s*circle\s*\(([^\)]+)\)\s*;/);
         if (m) {
@@ -2123,47 +2779,47 @@ Pan & zoom:
           continue;
         }
 
-        // \draw[...] (x,y) ellipse (a and b);
-        m = line.match(/\\draw\s*\[([^\]]*)\]\s*\(([^,]+),\s*([^\)]+)\)\s*ellipse\s*\(([^\s]+)\s+and\s+([^\)]+)\)\s*;/);
-        if (m) {
-          const styleRaw = m[1] || '';
-          const x = parseFloat(m[2]) * scale;
-          const y = -parseFloat(m[3]) * scale;
-          const rx = parseFloat(m[4]) * scale;
-          const ry = parseFloat(m[5]) * scale;
-          const style = this.parseDrawStyle(styleRaw, line);
-          if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(rx) && Number.isFinite(ry)) {
+        if (line.startsWith('\\fill')) return null;
+
+        if (line.startsWith('\\draw')) {
+          const draw = this.splitTikZDraw(line);
+          if (!draw) return null;
+          const style = this.parseDrawStyle(draw.styleRaw, line);
+
+          // \draw[...] (x,y) ellipse (a and b);
+          m = draw.path.match(/^\(([^,]+),\s*([^\)]+)\)\s*ellipse\s*\(([^\s]+)\s+and\s+([^\)]+)\)\s*;/);
+          if (m) {
+            const x = parseFloat(m[1]) * scale;
+            const y = -parseFloat(m[2]) * scale;
+            const rx = parseFloat(m[3]) * scale;
+            const ry = parseFloat(m[4]) * scale;
+            if (![x, y, rx, ry].every(Number.isFinite)) return null;
             ellipses.push({ x, y, rx, ry, style });
+            continue;
           }
-          continue;
-        }
 
-        // \draw[STYLE] (a) -- (b);
-        m = line.match(/\\draw\s*\[([^\]]*)\]\s*(.+?)\s*--\s*(.+?)\s*;/);
-        if (m) {
-          const styleRaw = m[1] || '';
-          const aRaw = m[2].trim();
-          const bRaw = m[3].trim();
-          const style = this.parseDrawStyle(styleRaw, line);
-          const a = this.parseCoord(aRaw, scale);
-          const b = this.parseCoord(bRaw, scale);
-          if (a && b) draws.push({ lineType: 'line', style, a, b, ctrl: null });
-          continue;
-        }
+          // \draw[STYLE] (a) .. controls (c) .. (b);
+          m = draw.path.match(/^(.+?)\s*\.\.\s*controls\s*(.+?)\s*\.\.\s*(.+?)\s*;/);
+          if (m) {
+            const a = this.parseCoord(m[1].trim(), scale);
+            const c = this.parseCoord(m[2].trim(), scale);
+            const b = this.parseCoord(m[3].trim(), scale);
+            if (!a || !b || !c) return null;
+            draws.push({ lineType: 'curve', style, a, b, ctrl: c });
+            continue;
+          }
 
-        // \draw[STYLE] (a) .. controls (c) .. (b);
-        m = line.match(/\\draw\s*\[([^\]]*)\]\s*(.+?)\s*\.\.\s*controls\s*(.+?)\s*\.\.\s*(.+?)\s*;/);
-        if (m) {
-          const styleRaw = m[1] || '';
-          const aRaw = m[2].trim();
-          const cRaw = m[3].trim();
-          const bRaw = m[4].trim();
-          const style = this.parseDrawStyle(styleRaw, line);
-          const a = this.parseCoord(aRaw, scale);
-          const b = this.parseCoord(bRaw, scale);
-          const c = this.parseCoord(cRaw, scale);
-          if (a && b && c) draws.push({ lineType: 'curve', style, a, b, ctrl: c });
-          continue;
+          // \draw[STYLE] (a) -- (b);
+          m = draw.path.match(/^(.+?)\s*--\s*(.+?)\s*;/);
+          if (m) {
+            const a = this.parseCoord(m[1].trim(), scale);
+            const b = this.parseCoord(m[2].trim(), scale);
+            if (!a || !b) return null;
+            draws.push({ lineType: 'line', style, a, b, ctrl: null });
+            continue;
+          }
+
+          return null;
         }
 
         // \node at (x,y) {...};
@@ -2176,6 +2832,11 @@ Pan & zoom:
           if (Number.isFinite(x) && Number.isFinite(y)) nodes.push({ x, y, tex });
           continue;
         }
+
+        if (line.startsWith('\\node')) return null;
+
+        // Refuse unknown non-comment input instead of silently replacing the canvas with an empty one.
+        return null;
       }
 
       return { points, draws, ellipses, nodes };
@@ -2185,16 +2846,47 @@ Pan & zoom:
     }
   }
 
+  splitTikZDraw(line) {
+    const prefix = line.match(/^\\draw\s*/);
+    if (!prefix) return null;
+    let index = prefix[0].length;
+    let styleRaw = '';
+
+    if (line[index] === '[') {
+      let depth = 0;
+      let end = -1;
+      for (let i = index; i < line.length; i++) {
+        if (line[i] === '[') depth += 1;
+        else if (line[i] === ']') {
+          depth -= 1;
+          if (depth === 0) {
+            end = i;
+            break;
+          }
+        }
+      }
+      if (end < 0) return null;
+      styleRaw = line.slice(index + 1, end);
+      index = end + 1;
+    }
+
+    const path = line.slice(index).trim();
+    return path ? { styleRaw, path } : null;
+  }
+
   parseDrawStyle(styleRaw, line) {
     const s = styleRaw.replace(/\s+/g, ' ').trim().toLowerCase();
     let lineStyle = 'solid';
     if (s.includes('dashed')) lineStyle = 'dashed';
     else if (s.includes('dotted')) lineStyle = 'dotted';
-    else if (s.includes('snake')) lineStyle = 'wavy';
-    else if (s.includes('coil')) lineStyle = 'spring';
+    else if (s.includes('snake') || s.includes('photon')) lineStyle = 'wavy';
+    else if (s.includes('coil') || s.includes('gluon')) lineStyle = 'spring';
 
     let arrow = 'none';
-    if (s.includes('<->')) arrow = 'both';
+    if (/\{stealth\}\s*-\s*\{stealth\}/.test(s)) arrow = 'both';
+    else if (/\{stealth\}\s*-/.test(s)) arrow = 'backward';
+    else if (/-\s*\{stealth\}/.test(s)) arrow = 'forward';
+    else if (s.includes('<->')) arrow = 'both';
     else if (s.includes('->')) arrow = 'forward';
     else if (s.includes('<-')) arrow = 'backward';
 
@@ -2238,6 +2930,8 @@ Pan & zoom:
   }
 
   applyParsedToCanvas(parsed) {
+    const wasBulkUpdating = this.isBulkUpdating;
+    this.isBulkUpdating = true;
     // clear fabric
     this.canvas.getObjects().slice().forEach(o => this.canvas.remove(o));
     this.canvas.discardActiveObject();
@@ -2305,16 +2999,41 @@ Pan & zoom:
     const labelMax = this.labels.reduce((max, l) => Math.max(max, this.valOr(l.id, 0)), 0);
     this.objectId = Math.max(this.objectId, objMax, labelMax);
 
+    this.isBulkUpdating = wasBulkUpdating;
     this.canvas.requestRenderAll();
   }
 
   // -------------------- History --------------------
+  serializeCanvasForHistory() {
+    const roots = this.canvas.getObjects().filter(obj => !obj.excludeFromExport);
+    const json = this.canvas.toJSON(['data']);
+
+    // ActiveSelection keeps its members in the canvas array using temporary
+    // parent-relative coordinates. Store their world positions so undo/redo
+    // never resurrects a visually moved selection at stale local coordinates.
+    (json.objects || []).forEach((item, index) => {
+      const obj = roots[index];
+      if (!obj || !obj.group || obj.group.type !== 'activeSelection') return;
+      const center = this.getObjectWorldCenter(obj);
+      item.left = center.x;
+      item.top = center.y;
+      item.originX = 'center';
+      item.originY = 'center';
+    });
+    return json;
+  }
+
   snapshotState() {
     return {
       vt: [...this.canvas.viewportTransform],
       zoom: this.canvas.getZoom(),
-      canvas: this.canvas.toJSON(['data']),
-      labels: this.labels.map(l => ({ x: l.x, y: l.y, tex: l.tex, bind: l.bind }))
+      canvas: this.serializeCanvasForHistory(),
+      labels: this.labels.map(l => ({
+        x: l.x,
+        y: l.y,
+        tex: l.tex,
+        bind: l.bind ? { ...l.bind } : null
+      }))
     };
   }
 
@@ -2325,6 +3044,7 @@ Pan & zoom:
     this.labels = [];
     this.clearLabelSelection();
 
+    this.isBulkUpdating = true;
     this.canvas.loadFromJSON(state.canvas, () => {
       this.canvas.setViewportTransform(state.vt);
       this.canvas.setZoom(state.zoom || 1);
@@ -2334,17 +3054,22 @@ Pan & zoom:
 
       (state.labels || []).forEach(item => this.addLabelDirect(item.x, item.y, item.tex, item.bind ? item.bind : null));
 
-      const objMax = this.canvas.getObjects().reduce((max, o) => {
-        const id = (o && o.data && o.data.id) ? o.data.id : 0;
-        return Math.max(max, id);
-      }, 0);
+      this.canvas.getObjects().forEach(obj => {
+        if (obj.data && obj.data.kind === 'selectionGroup') this.configureMovableSelection(obj);
+      });
+      this.syncLineTreeToWorld(this.canvas.getObjects());
+      this.updateCanvasObjectInteractivity();
+
+      const objMax = this.getMaxObjectId();
       const labelMax = this.labels.reduce((max, l) => Math.max(max, this.valOr(l.id, 0)), 0);
       this.objectId = Math.max(this.objectId, objMax, labelMax);
 
-      this.editorDirty = false;
+      this.isBulkUpdating = false;
+      this.setEditorDirty(false);
       this.generateTikZCode({ forceWriteEditor: true });
 
       this.canvas.requestRenderAll();
+      this.updateSelectionActionState();
     });
   }
 
@@ -2448,12 +3173,11 @@ Pan & zoom:
   }
 
   toggleGrid() {
-    const grid = document.querySelector('.canvas-grid');
     const btn = document.getElementById('gridToggleBtn');
-    if (!grid) return;
-    const hidden = grid.style.display === 'none';
-    grid.style.display = hidden ? 'block' : 'none';
-    if (btn) btn.classList.toggle('active', hidden);
+    this.gridVisible = !this.gridVisible;
+    if (btn) btn.classList.toggle('active', this.gridVisible);
+    this.updateGridVisual();
+    this.persistGridSettings();
   }
 
   handleResize() {
@@ -2466,6 +3190,7 @@ Pan & zoom:
     this.canvas.setWidth(w);
     this.canvas.setHeight(h);
     this.canvas.requestRenderAll();
+    this.updateGridVisual();
   }
 
   // -------------------- Helpers --------------------

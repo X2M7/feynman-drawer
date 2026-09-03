@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Feynman图绘制器</title>
+  <title>FeynDraw</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9A%9B%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="./style.css">
   <link rel="manifest" href="./manifest.json">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
@@ -16,7 +17,7 @@
 <body>
 <div class="app-container">
   <header class="app-header">
-    <h1><i class="fas fa-atom"></i> Feynman图绘制器</h1>
+    <h1><i class="fas fa-atom"></i> FeynDraw</h1>
     <div class="header-actions">
       <a id="langToggleBtn" href="./index-en.html" title="English" data-target="./index-en.html"><i class="fas fa-language"></i> EN</a>
       <button id="helpBtn" title="帮助"><i class="fas fa-question-circle"></i> 帮助</button>
@@ -36,6 +37,15 @@
           </button>
           <button class="tool-btn" data-tool="delete" title="删除元素">
             <i class="fas fa-trash"></i> 删除
+          </button>
+          <button id="duplicateBtn" class="selection-action-btn" type="button" title="复制选中对象" disabled>
+            <i class="fas fa-copy"></i> 复制
+          </button>
+          <button id="groupBtn" class="selection-action-btn" type="button" title="将选中对象组合为整体" disabled>
+            <i class="fas fa-object-group"></i> 组合
+          </button>
+          <button id="ungroupBtn" class="selection-action-btn" type="button" title="取消选中组合" disabled>
+            <i class="fas fa-object-ungroup"></i> 取消组合
           </button>
         </div>
       </div>
@@ -70,7 +80,7 @@
               <option value="solid">实线</option>
               <option value="dashed">虚线</option>
               <option value="wavy">波浪线</option>
-              <option value="spring">弹簧线</option>
+              <option value="spring">胶子线（线圈）</option>
               <option value="dotted">点线</option>
             </select>
           </div>
@@ -131,7 +141,24 @@
         <button id="resetViewBtn" title="重置视图"><i class="fas fa-expand-arrows-alt"></i></button>
         <button id="gridToggleBtn" title="切换网格" class="active"><i class="fas fa-th"></i></button>
       </div>
+
+      <div class="canvas-options" aria-label="网格设置">
+        <label class="switch-control" for="snapToGridToggle" title="移动或绘制时对齐到最近网格点">
+          <input id="snapToGridToggle" type="checkbox" checked>
+          <span class="switch-track" aria-hidden="true"></span>
+          <span>网格吸附</span>
+        </label>
+        <label class="grid-size-control" for="gridSizeInput">
+          <span>格距</span>
+          <input id="gridSizeInput" type="number" min="5" max="100" step="5" value="20" inputmode="numeric">
+          <span>px</span>
+        </label>
+      </div>
     </main>
+
+    <div id="layoutResizer" class="panel-resizer" role="separator" aria-label="调整画板与 TikZ 代码面板宽度" aria-orientation="vertical" aria-valuemin="280" aria-valuenow="350" title="拖动调整宽度，双击恢复默认" tabindex="0">
+      <span class="panel-resizer-grip" aria-hidden="true"></span>
+    </div>
 
     <aside class="code-panel">
       <div class="panel-header">
@@ -139,9 +166,6 @@
         <div class="panel-actions">
           <button id="clearCodeBtn" title="清空画布">
             <i class="fas fa-trash"></i>
-          </button>
-          <button id="refreshCodeBtn" title="Apply：应用右侧代码到预览（Ctrl/⌘Enter）">
-            <i class="fas fa-sync-alt"></i>
           </button>
         </div>
       </div>
@@ -153,10 +177,13 @@
 
       <div class="code-actions">
         <button id="exportPngBtn" class="btn-secondary">
-          <i class="fas fa-image"></i> 导出PNG
+          <i class="fas fa-image"></i><span class="action-label">导出 PNG</span>
+        </button>
+        <button id="exportSvgBtn" class="btn-secondary">
+          <i class="fas fa-file-code"></i><span class="action-label">导出 SVG</span>
         </button>
         <button id="copyTikzBtn" class="btn-primary">
-          <i class="fas fa-copy"></i> 复制TikZ
+          <i class="fas fa-copy"></i><span class="action-label">复制 TikZ</span>
         </button>
       </div>
 
@@ -195,6 +222,7 @@
   </div>
 </div>
 
+<script src="./layout.js"></script>
 <script src="./app.js"></script>
 <script>
   if ('serviceWorker' in navigator) {

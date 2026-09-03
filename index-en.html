@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Feynman Diagram Drawer</title>
+  <title>FeynDraw</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9A%9B%3C/text%3E%3C/svg%3E">
   <link rel="stylesheet" href="./style.css">
   <link rel="manifest" href="./manifest.json">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
@@ -16,7 +17,7 @@
 <body>
 <div class="app-container">
   <header class="app-header">
-    <h1><i class="fas fa-atom"></i> Feynman Diagram Drawer</h1>
+    <h1><i class="fas fa-atom"></i> FeynDraw</h1>
     <div class="header-actions">
       <a id="langToggleBtn" href="./index.html" title="Switch to Chinese" data-target="./index.html"><i class="fas fa-language"></i> 中文</a>
       <button id="helpBtn" title="Help"><i class="fas fa-question-circle"></i> Help</button>
@@ -36,6 +37,15 @@
           </button>
           <button class="tool-btn" data-tool="delete" title="Delete element">
             <i class="fas fa-trash"></i> Delete
+          </button>
+          <button id="duplicateBtn" class="selection-action-btn" type="button" title="Duplicate selected objects" disabled>
+            <i class="fas fa-copy"></i> Duplicate
+          </button>
+          <button id="groupBtn" class="selection-action-btn" type="button" title="Group selected objects" disabled>
+            <i class="fas fa-object-group"></i> Group
+          </button>
+          <button id="ungroupBtn" class="selection-action-btn" type="button" title="Ungroup the selected group" disabled>
+            <i class="fas fa-object-ungroup"></i> Ungroup
           </button>
         </div>
       </div>
@@ -70,7 +80,7 @@
               <option value="solid">Solid</option>
               <option value="dashed">Dashed</option>
               <option value="wavy">Wavy</option>
-              <option value="spring">Spring</option>
+              <option value="spring">Gluon (coil)</option>
               <option value="dotted">Dotted</option>
             </select>
           </div>
@@ -131,7 +141,24 @@
         <button id="resetViewBtn" title="Reset View"><i class="fas fa-expand-arrows-alt"></i></button>
         <button id="gridToggleBtn" title="Toggle Grid" class="active"><i class="fas fa-th"></i></button>
       </div>
+
+      <div class="canvas-options" aria-label="Grid settings">
+        <label class="switch-control" for="snapToGridToggle" title="Align drawing and movement to the nearest grid point">
+          <input id="snapToGridToggle" type="checkbox" checked>
+          <span class="switch-track" aria-hidden="true"></span>
+          <span>Snap to Grid</span>
+        </label>
+        <label class="grid-size-control" for="gridSizeInput">
+          <span>Spacing</span>
+          <input id="gridSizeInput" type="number" min="5" max="100" step="5" value="20" inputmode="numeric">
+          <span>px</span>
+        </label>
+      </div>
     </main>
+
+    <div id="layoutResizer" class="panel-resizer" role="separator" aria-label="Resize canvas and TikZ code panels" aria-orientation="vertical" aria-valuemin="280" aria-valuenow="350" title="Drag to resize; double-click to reset" tabindex="0">
+      <span class="panel-resizer-grip" aria-hidden="true"></span>
+    </div>
 
     <aside class="code-panel">
       <div class="panel-header">
@@ -139,9 +166,6 @@
         <div class="panel-actions">
           <button id="clearCodeBtn" title="Clear canvas">
             <i class="fas fa-trash"></i>
-          </button>
-          <button id="refreshCodeBtn" title="Apply: apply code to preview (Ctrl/⌘+Enter)">
-            <i class="fas fa-sync-alt"></i>
           </button>
         </div>
       </div>
@@ -153,10 +177,13 @@
 
       <div class="code-actions">
         <button id="exportPngBtn" class="btn-secondary">
-          <i class="fas fa-image"></i> Export PNG
+          <i class="fas fa-image"></i><span class="action-label">Export PNG</span>
+        </button>
+        <button id="exportSvgBtn" class="btn-secondary">
+          <i class="fas fa-file-code"></i><span class="action-label">Export SVG</span>
         </button>
         <button id="copyTikzBtn" class="btn-primary">
-          <i class="fas fa-copy"></i> Copy TikZ
+          <i class="fas fa-copy"></i><span class="action-label">Copy TikZ</span>
         </button>
       </div>
 
@@ -195,6 +222,7 @@
   </div>
 </div>
 
+<script src="./layout.js"></script>
 <script src="./app.js"></script>
 <script>
   if ('serviceWorker' in navigator) {
