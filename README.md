@@ -38,7 +38,7 @@
 说明：
 - 坐标采用 `1 TikZ unit = 20 px` 的映射。
 - 曲线白色控制点就是 TikZ `controls (c)` 中的 `c`，GUI 与代码使用同一组 Bézier 坐标。
-- 线型中的 wavy/spring 会映射到 TikZ 的 `snake/coil` 装饰。
+- 线型中的 wavy/spring 会映射到 TikZ 的 `snake/coil` 装饰；胶子线预览采用与 PGF `coil` 相同的投影线圈模型。
 - 中点箭头与中点叉号会在导出时使用注释 `fd-arrow` 来保留语义。
 
 ## 文件结构

@@ -1151,6 +1151,8 @@ Pan & zoom:
       stroke: paint.stroke,
       strokeWidth: paint.strokeWidth,
       strokeDashArray: this.getDashArray(paint.lineStyle),
+      strokeLineCap: 'round',
+      strokeLineJoin: 'round',
       fill: null,
       selectable: false,
       evented: false,
@@ -1629,12 +1631,12 @@ Pan & zoom:
     if (lineType === 'curve') {
       const c = ctrl ? ctrl : this.getDefaultCurveCtrl(start, end);
       if (lineStyle === 'wavy') return this.pathWavyOnCurve(start, c, end, { amplitude: 2.6, wavelength: 15 });
-      if (lineStyle === 'spring') return this.pathSpringOnCurve(start, c, end, { amplitude: 5, wavelength: 7 });
+      if (lineStyle === 'spring') return this.pathSpringOnCurve(start, c, end, { amplitude: 6, wavelength: 10, aspect: 0.5 });
       return `M ${start.x} ${start.y} C ${c.x} ${c.y} ${c.x} ${c.y} ${end.x} ${end.y}`;
     }
 
     if (lineStyle === 'wavy') return this.pathWavy(start, end, { amplitude: 2.6, wavelength: 15 });
-    if (lineStyle === 'spring') return this.pathSpring(start, end, { amplitude: 5, wavelength: 7 });
+    if (lineStyle === 'spring') return this.pathSpring(start, end, { amplitude: 6, wavelength: 10, aspect: 0.5 });
     return `M ${start.x} ${start.y} L ${end.x} ${end.y}`;
   }
 
@@ -1661,99 +1663,164 @@ Pan & zoom:
     return d;
   }
 
-  pathSpring(p1, p2, { amplitude = 5, wavelength = 7 } = {}) {
-    const dx = p2.x - p1.x, dy = p2.y - p1.y;
-    const L = Math.hypot(dx, dy) || 1;
-    const ux = dx / L, uy = dy / L;
-    const nx = -uy, ny = ux;
+  pathSpring(p1, p2, { amplitude = 6, wavelength = 10, aspect = 0.5 } = {}) {
+    return this.pathCoilOnSampler(
+      this.createLineArcSampler(p1, p2),
+      { amplitude, wavelength, aspect }
+    );
+  }
 
-    const steps = Math.max(42, Math.floor(L / 0.9));
-    const cycles = Math.max(1, Math.round(L / wavelength));
-    const k = (2 * Math.PI * cycles) / L;
-    const fadeLength = Math.min(wavelength, L / 2);
-
-    let d = `M ${p1.x} ${p1.y}`;
+  pathWavyOnCurve(p0, p1, p2, { amplitude = 2.6, wavelength = 15 } = {}) {
+    const curve = this.createCurveArcSampler(p0, p1, p2);
+    const total = curve.total || 1;
+    const cycles = Math.max(1, Math.round(total / wavelength));
+    const k = (2 * Math.PI * cycles) / total;
+    const steps = Math.max(48, Math.min(4096, cycles * 16));
+    let d = `M ${p0.x} ${p0.y}`;
     for (let i = 1; i <= steps; i++) {
-      const s = (L * i) / steps;
       if (i === steps) {
         d += ` L ${p2.x} ${p2.y}`;
         continue;
       }
-      const edgeRatio = Math.min(1, Math.min(s, L - s) / (fadeLength || 1));
-      const envelope = edgeRatio * edgeRatio * (3 - 2 * edgeRatio);
-      const nOff = amplitude * Math.cos(k * s) * envelope;
-      const tOff = amplitude * 0.25 * Math.sin(k * s) * envelope;
-      d += ` L ${p1.x + ux * (s + tOff) + nx * nOff} ${p1.y + uy * (s + tOff) + ny * nOff}`;
+      const s = total * i / steps;
+      const frame = curve.at(s);
+      const off = amplitude * Math.sin(k * s);
+      d += ` L ${this.pathNumber(frame.x + frame.nx * off)} ${this.pathNumber(frame.y + frame.ny * off)}`;
     }
     return d;
   }
 
-  pathWavyOnCurve(p0, p1, p2, { amplitude = 2.6, wavelength = 15 } = {}) {
-    const steps = 96;
-    const curve = this.sampleCurveByArcLength(p0, p1, p2, steps);
-    const total = curve.total || 1;
-    const cycles = Math.max(1, Math.round(total / wavelength));
-    const k = (2 * Math.PI * cycles) / total;
-    let d = `M ${p0.x} ${p0.y}`;
-    curve.samples.forEach((sample, index) => {
-      if (index === curve.samples.length - 1) {
-        d += ` L ${p2.x} ${p2.y}`;
-        return;
-      }
-      const { pt, tang, s } = sample;
-      const L = Math.hypot(tang.x, tang.y) || 1;
-      const nx = -tang.y / L;
-      const ny = tang.x / L;
-      const off = amplitude * Math.sin(k * s);
-      d += ` L ${pt.x + nx * off} ${pt.y + ny * off}`;
-    });
+  pathSpringOnCurve(p0, p1, p2, { amplitude = 6, wavelength = 10, aspect = 0.5 } = {}) {
+    return this.pathCoilOnSampler(
+      this.createCurveArcSampler(p0, p1, p2),
+      { amplitude, wavelength, aspect }
+    );
+  }
+
+  pathCoilOnSampler(sampler, { amplitude = 6, wavelength = 10, aspect = 0.5 } = {}) {
+    const total = sampler && Number.isFinite(sampler.total) ? sampler.total : 0;
+    const start = sampler.at(0);
+    if (total < 0.001) return `M ${this.pathNumber(start.x)} ${this.pathNumber(start.y)}`;
+
+    // PGF's coil is a projected circular spring. Each row is one cubic
+    // segment: [aspect coefficient, amplitude coefficient, twelfth of cycle].
+    const template = [
+      [[0, 0.555, 1], [0.445, 1, 2], [1, 1, 3]],
+      [[1.555, 1, 4], [2, 0.555, 5], [2, 0, 6]],
+      [[2, -0.555, 7], [1.555, -1, 8], [1, -1, 9]],
+      [[0.445, -1, 10], [0, -0.555, 11], [0, 0, 12]]
+    ];
+    const cycles = Math.max(1, Math.min(512, Math.round(total / wavelength)));
+    const period = total / cycles;
+    // Only taper genuinely short paths. Basing the amplitude on per-cycle
+    // period makes the coil visibly "breathe" whenever rounding adds a cycle.
+    const effectiveAmplitude = amplitude * Math.min(1, total / wavelength);
+    const mapPoint = (cycle, item) => {
+      const axial = cycle * period
+        + period * item[2] / 12
+        + aspect * effectiveAmplitude * item[0];
+      const normal = effectiveAmplitude * item[1];
+      const frame = sampler.at(axial);
+      return {
+        x: frame.x + frame.nx * normal,
+        y: frame.y + frame.ny * normal
+      };
+    };
+
+    let d = `M ${this.pathNumber(start.x)} ${this.pathNumber(start.y)}`;
+    for (let cycle = 0; cycle < cycles; cycle++) {
+      template.forEach(segment => {
+        const c1 = mapPoint(cycle, segment[0]);
+        const c2 = mapPoint(cycle, segment[1]);
+        const end = mapPoint(cycle, segment[2]);
+        d += ` C ${this.pathNumber(c1.x)} ${this.pathNumber(c1.y)}`;
+        d += ` ${this.pathNumber(c2.x)} ${this.pathNumber(c2.y)}`;
+        d += ` ${this.pathNumber(end.x)} ${this.pathNumber(end.y)}`;
+      });
+    }
     return d;
   }
 
-  pathSpringOnCurve(p0, p1, p2, { amplitude = 5, wavelength = 7 } = {}) {
-    const steps = 140;
-    const curve = this.sampleCurveByArcLength(p0, p1, p2, steps);
-    const total = curve.total || 1;
-    const cycles = Math.max(1, Math.round(total / wavelength));
-    const k = (2 * Math.PI * cycles) / total;
-    const fadeLength = Math.min(wavelength, total / 2);
-    let d = `M ${p0.x} ${p0.y}`;
-    curve.samples.forEach((sample, index) => {
-      if (index === curve.samples.length - 1) {
-        d += ` L ${p2.x} ${p2.y}`;
-        return;
-      }
-      const { pt, tang, s } = sample;
-      const L = Math.hypot(tang.x, tang.y) || 1;
-      const ux = tang.x / L;
-      const uy = tang.y / L;
-      const nx = -uy;
-      const ny = ux;
-      const edgeRatio = Math.min(1, Math.min(s, total - s) / (fadeLength || 1));
-      const envelope = edgeRatio * edgeRatio * (3 - 2 * edgeRatio);
-      const nOff = amplitude * Math.cos(k * s) * envelope;
-      const tOff = amplitude * 0.25 * Math.sin(k * s) * envelope;
-      d += ` L ${pt.x + nx * nOff + ux * tOff} ${pt.y + ny * nOff + uy * tOff}`;
-    });
-    return d;
+  createLineArcSampler(p0, p1) {
+    const dx = p1.x - p0.x;
+    const dy = p1.y - p0.y;
+    const total = Math.hypot(dx, dy);
+    const ux = total > 0.000001 ? dx / total : 1;
+    const uy = total > 0.000001 ? dy / total : 0;
+    return {
+      total,
+      at: (s) => ({
+        x: p0.x + ux * s,
+        y: p0.y + uy * s,
+        ux,
+        uy,
+        nx: -uy,
+        ny: ux
+      })
+    };
   }
 
-  sampleCurveByArcLength(p0, p1, p2, steps) {
-    const samples = [];
-    let last = { x: p0.x, y: p0.y };
+  createCurveArcSampler(p0, p1, p2) {
+    const controlLength = Math.hypot(p1.x - p0.x, p1.y - p0.y)
+      + Math.hypot(p2.x - p1.x, p2.y - p1.y);
+    const steps = Math.max(96, Math.min(2048, Math.ceil(controlLength / 1.5)));
+    const samples = [{ t: 0, s: 0, pt: { x: p0.x, y: p0.y } }];
+    let last = samples[0].pt;
     let total = 0;
     for (let i = 1; i <= steps; i++) {
       const t = i / steps;
       const pt = this.sampleCubic(p0, p1, p1, p2, t);
       total += Math.hypot(pt.x - last.x, pt.y - last.y);
-      samples.push({
-        pt,
-        tang: this.cubicTangent(p0, p1, p1, p2, t),
-        s: total
-      });
+      samples.push({ t, s: total, pt });
       last = pt;
     }
-    return { samples, total };
+
+    const chord = { x: p2.x - p0.x, y: p2.y - p0.y };
+    const frameAtT = (t, distance = null) => {
+      let pt = this.sampleCubic(p0, p1, p1, p2, t);
+      let tang = this.cubicTangent(p0, p1, p1, p2, t);
+      let length = Math.hypot(tang.x, tang.y);
+      if (length < 0.000001) {
+        const delta = 1 / steps;
+        const before = this.sampleCubic(p0, p1, p1, p2, Math.max(0, t - delta));
+        const after = this.sampleCubic(p0, p1, p1, p2, Math.min(1, t + delta));
+        tang = { x: after.x - before.x, y: after.y - before.y };
+        length = Math.hypot(tang.x, tang.y);
+      }
+      if (length < 0.000001) {
+        tang = chord;
+        length = Math.hypot(chord.x, chord.y) || 1;
+      }
+      const ux = tang.x / length;
+      const uy = tang.y / length;
+      if (distance !== null) pt = { x: pt.x + ux * distance, y: pt.y + uy * distance };
+      return { x: pt.x, y: pt.y, ux, uy, nx: -uy, ny: ux };
+    };
+
+    const at = (s) => {
+      if (total < 0.000001) return frameAtT(0, s);
+      if (s <= 0) return frameAtT(0, s);
+      if (s >= total) return frameAtT(1, s - total);
+
+      let low = 0;
+      let high = samples.length - 1;
+      while (high - low > 1) {
+        const mid = (low + high) >> 1;
+        if (samples[mid].s < s) low = mid;
+        else high = mid;
+      }
+      const span = samples[high].s - samples[low].s;
+      const ratio = span > 0 ? (s - samples[low].s) / span : 0;
+      const t = samples[low].t + (samples[high].t - samples[low].t) * ratio;
+      return frameAtT(t);
+    };
+
+    return { total, at };
+  }
+
+  pathNumber(value) {
+    const rounded = Math.round(value * 1000) / 1000;
+    return Object.is(rounded, -0) ? 0 : rounded;
   }
 
   sampleCubic(p0, p1, p2, p3, t) {
@@ -1945,6 +2012,8 @@ Pan & zoom:
       stroke: data.style.stroke,
       strokeWidth: data.style.strokeWidth,
       strokeDashArray: this.getDashArray(data.style.lineStyle),
+      strokeLineCap: 'round',
+      strokeLineJoin: 'round',
       fill: null,
       selectable: false,
       evented: false,
@@ -2720,7 +2789,7 @@ Pan & zoom:
     if (data.style.lineStyle === 'dashed') parts.push('dashed');
     if (data.style.lineStyle === 'dotted') parts.push('dotted');
     if (data.style.lineStyle === 'wavy') parts.push('decorate, decoration={snake, segment length=10pt, amplitude=2pt}');
-    if (data.style.lineStyle === 'spring') parts.push('decorate, decoration={coil, segment length=5pt, amplitude=3pt}');
+    if (data.style.lineStyle === 'spring') parts.push('decorate, decoration={coil, aspect=0.5, segment length=5pt, amplitude=3pt}');
 
     const arrow = data.style.arrow;
     if (arrow === 'forward') parts.push('-{Stealth}');
